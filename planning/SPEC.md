@@ -5,6 +5,13 @@
 **Build tool:** Claude Code, from `jellyfin/jellyfin-plugin-template` scaffold
 **Author:** Jon (spec) / Claude Code (implementation)
 
+> **Retarget note (2026-08-13):** the install target is the NAS's real Jellyfin
+> instance, which runs **10.11.6**, not 10.10.x. Build is now pinned to
+> `net9.0` / `Jellyfin.Controller`+`Model` `10.11.6` / targetAbi `10.11.0.0`
+> (10.11.x requires net9.0 per its NuGet dependency group — 10.10.x's net8.0
+> no longer applies). Every ".NET 8" / "10.10.x" / "10.10.0.0" reference below
+> is superseded by this note; the rest of the architecture is unaffected.
+
 ---
 
 ## 1. Problem statement
