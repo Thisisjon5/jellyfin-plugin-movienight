@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.2.5.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.5.0/jellyfin-plugin-movienight_0.2.5.0.zip",
+        "checksum": "547178e0fded82940fd4c6effc24d51d",
+        "timestamp": "2026-08-13T22:25:08Z",
+        "changelog": "Diagnostic build: adds logging of every stream request's fileName/remoteIp/isLoopback/userAgent and which check rejects it, to pin down why ffmpeg's own transcode request 404s against stream/master.m3u8 while an identical browser request gets a clean 403."
+      },
+      {
         "version": "0.2.4.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.4.0/jellyfin-plugin-movienight_0.2.4.0.zip",
