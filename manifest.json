@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.2.2.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.2.0/jellyfin-plugin-movienight_0.2.2.0.zip",
+        "checksum": "6ced8d3f24756c0c82fff7bb77d50827",
+        "timestamp": "2026-08-13T21:30:56Z",
+        "changelog": "Fixes Directory.Build.props hardcoding the assembly's real version to 0.0.0.0 for every build. That's why the dashboard showed Version 0.0.0.0 / Repository Unknown after restarting into 0.2.1.0."
+      },
+      {
         "version": "0.2.1.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.1.0/jellyfin-plugin-movienight_0.2.1.0.zip",
