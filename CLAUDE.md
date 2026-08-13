@@ -16,13 +16,22 @@ registered as a Plugin Repository named "MovieNight" in the NAS Jellyfin's
 `system.xml`. Install target is the NAS's real Jellyfin container ([[jellyfin]],
 10.11.6ubu2404-ls24, host port 8096) — not a throwaway dev instance.
 
-**Phase 1 — in progress (2026-08-13).** Code shipped (v0.2.2.0): `TunerRegistrar`
+**Phase 1 — DONE (2026-08-13), v0.2.6.0.** Gate met: "Movie Night" channel tunes
+and plays (with audio) in Jellyfin Web, confirmed by Jon directly. `TunerRegistrar`
 (`IHostedService`) registers an `"m3u"` tuner + `"xmltv"` listings provider via
 `ITunerHostManager.SaveTunerHost`/`IListingsManager.SaveListingProvider` (in-process,
-no REST needed — confirmed against actual 10.11.11 source). `MovieNightController`
-serves `playlist.m3u`/`stream/master.m3u8`/`stream/{segment}.ts`/`epg.xml`, loopback-only.
-Two real bugs found and fixed along the way (see gotchas below); channel-tunes-in-Web
-gate not yet confirmed — Jon installing v0.2.2.0 now.
+no REST needed — confirmed against actual 10.11.11 source, highest-uncertainty item
+in the whole project, now fully de-risked). `MovieNightController` serves
+`playlist.m3u`/`stream/{fileName}` (master.m3u8 + segments, one dispatching route)/
+`epg.xml`, loopback-only. Five real bugs found and fixed en route (see gotchas) —
+this phase took far more iteration than expected; budget accordingly for Phase 2.
+
+Known follow-up, not blocking: the hand-made test clip is only 15s, which raced
+Jellyfin's live-TV transcode startup latency (~10-17s from tune to first segment)
+closely enough to intermittently trip the client's `levelLoadTimeOut`. Worked on
+retry. Phase 2's real BroadcastManager won't have this problem (continuous ffmpeg
+process, not a finite pre-baked clip) — no fix needed unless Phase 1 spike assets
+get reused for further manual testing, in which case regenerate at 60-90s.
 
 ## Build
 
@@ -63,6 +72,30 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   HTTP call in `StartAsync` (e.g. `SaveTunerHost`, which validates the M3U by
   fetching it) gets "Connection refused" every time. Register the real work via
   `lifetime.ApplicationStarted.Register(...)` instead of doing it inline.
+- **`ApplicationStarted` alone still isn't enough** — Jellyfin's own middleware
+  returns 503 for a further window while "Running startup tasks" executes after
+  Kestrel starts listening. Poll `IServerApplicationHost.CoreStartupHasCompleted`
+  (500ms interval) before making the loopback call.
+- **Never declare two `[HttpGet]` routes on the same controller where one is a
+  literal path and the other a parameterized template that can match the same
+  URL shape** (e.g. `stream/master.m3u8` + `stream/{fileName}`). In practice the
+  parameterized route can win and shadow the literal one — merge them into a
+  single action that dispatches internally instead.
+- **Don't ship loose files alongside the plugin DLL if you can avoid it.** On this
+  NAS, files extracted from the plugin zip appeared correctly in directory
+  listings but `File.Exists` returned false for them at runtime (confirmed via an
+  independent host-side read on the identical path also getting `ENOENT`) — a
+  filesystem quirk with zip extraction in this environment. Embed anything the
+  plugin needs to serve as an `EmbeddedResource` with an explicit `LogicalName`
+  instead (same pattern as `configPage.html`), read via
+  `Assembly.GetManifestResourceStream`. Sidesteps the whole bug class regardless
+  of root cause.
+- **After a version bump, "Install" in the dashboard often stages the new version
+  without loading it on the very next restart** — the "Update Plugins" scheduled
+  task sometimes only detects/stages the install *during* that restart's own
+  startup sequence, requiring a second restart to actually load it. Always verify
+  via `nas_container_logs` (`Loaded plugin: Movie Night X.Y.Z.W`) after restarting,
+  don't assume one restart cycle was enough.
 
 ## Standing rules
 
