@@ -13,13 +13,15 @@ namespace Jellyfin.Plugin.MovieNight;
 
 /// <summary>
 /// Registers the Movie Night M3U tuner and XMLTV listings provider once the server is actually
-/// accepting connections. Idempotent: reuses the existing entry (matched by URL) instead of
+/// ready to serve requests. Idempotent: reuses the existing entry (matched by URL) instead of
 /// duplicating it.
 /// </summary>
 public class TunerRegistrar : IHostedService
 {
     private const string ChannelName = "Movie Night";
     private const string LiveTvConfigKey = "livetv";
+    private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(60);
 
     private readonly ITunerHostManager _tunerHostManager;
     private readonly IListingsManager _listingsManager;
@@ -33,9 +35,9 @@ public class TunerRegistrar : IHostedService
     /// </summary>
     /// <param name="tunerHostManager">Used to persist the M3U tuner host entry.</param>
     /// <param name="listingsManager">Used to persist the XMLTV listings provider entry.</param>
-    /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
+    /// <param name="appHost">Used to build loopback URLs and check core-startup readiness.</param>
     /// <param name="configurationManager">Used to read the current Live TV config for idempotency checks.</param>
-    /// <param name="lifetime">Used to defer registration until Kestrel is actually accepting connections.</param>
+    /// <param name="lifetime">Used to defer registration until the host has started.</param>
     /// <param name="logger">Logger.</param>
     public TunerRegistrar(
         ITunerHostManager tunerHostManager,
@@ -58,13 +60,32 @@ public class TunerRegistrar : IHostedService
     {
         // SaveTunerHost validates the M3U by fetching it over loopback HTTP. StartAsync runs during
         // host startup, before Kestrel is listening, so calling it here gets "Connection refused".
-        // ApplicationStarted fires once the server is actually accepting connections.
-        _lifetime.ApplicationStarted.Register(() => _ = RegisterAsync());
+        // ApplicationStarted fires once Kestrel is up, but Jellyfin still returns 503 for a bit
+        // longer while it runs its own "startup tasks" - CoreStartupHasCompleted is the actual
+        // readiness signal for that window, so poll it before attempting registration.
+        _lifetime.ApplicationStarted.Register(() => _ = WaitForReadyThenRegisterAsync());
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task WaitForReadyThenRegisterAsync()
+    {
+        var deadline = DateTime.UtcNow + ReadinessTimeout;
+        while (!_appHost.CoreStartupHasCompleted && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(ReadinessPollInterval).ConfigureAwait(false);
+        }
+
+        if (!_appHost.CoreStartupHasCompleted)
+        {
+            _logger.LogWarning("Movie Night: server core startup did not complete within {Timeout}, skipping tuner/listings registration", ReadinessTimeout);
+            return;
+        }
+
+        await RegisterAsync().ConfigureAwait(false);
+    }
 
     private async Task RegisterAsync()
     {

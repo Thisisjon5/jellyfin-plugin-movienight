@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.2.2.0"
+version: "0.2.3.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -15,6 +15,10 @@ artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 - "hls/"
 changelog: >
+  0.2.3.0: Fix remaining startup race - ApplicationStarted fires before
+  Jellyfin's own middleware is ready (still returns 503 for a window while
+  "Running startup tasks" executes). Now polls
+  IServerApplicationHost.CoreStartupHasCompleted before registering.
   0.2.2.0: Fix Directory.Build.props - it hardcoded the assembly's actual
   Version/AssemblyVersion/FileVersion to 0.0.0.0 for every build (an
   unbumped template placeholder), so once Jellyfin loaded the plugin
