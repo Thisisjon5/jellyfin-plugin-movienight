@@ -7,10 +7,15 @@ Full spec + phased build plan: `planning/SPEC.md` (canonical — don't re-derive
 Phase 0 (scaffold) complete: template renamed, builds clean on `net9.0` against
 `Jellyfin.Controller`/`Jellyfin.Model` 10.11.6. Install target is the NAS's real
 Jellyfin container ([[jellyfin]], `nas_container_inspect` confirmed image version
-`10.11.6ubu2404-ls24`, host port 8096) — not a throwaway dev instance. Not yet
-installed there; Phase 0's full gate ("plugin installs from a manifest URL via
-dashboard") still needs a hosted manifest.json + zip reachable from the NAS
-(GitHub vs. Forgejo hosting still open, see below).
+`10.11.6ubu2404-ls24`, host port 8096) — not a throwaway dev instance.
+
+Repo is public on GitHub: https://github.com/Thisisjon5/jellyfin-plugin-movienight
+(Jon's ruling 2026-08-13, GitHub over Forgejo). v0.1.0.0 tagged, zip released,
+manifest.json committed to master and reachable at
+https://raw.githubusercontent.com/Thisisjon5/jellyfin-plugin-movienight/master/manifest.json.
+Still needs: Jon adds that URL as a Plugin Repository in the NAS Jellyfin dashboard,
+installs, restarts — that's the one remaining GUI step only he can do — then verify
+the config page renders (Phase 0 gate).
 
 ## Build
 
@@ -32,8 +37,11 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   `command-rebase`, `sync-labels`, `publish`, `changelog`, `scan-codeql`) — deleted,
   they don't work outside the jellyfin org. Kept `build.yaml`/`test.yaml` (generic,
   no org-specific secrets) as the CI skeleton.
-- Git hosting (GitHub vs. Jon's Forgejo) is an open decision, deferred to Phase 5
-  packaging per spec §8 — don't assume one when wiring CI/release automation.
+- Git hosting: GitHub, public repo (Jon's ruling 2026-08-13) — spec §8 left this
+  open for Phase 5, resolved early because Phase 0's install-path gate needed a
+  real manifest host now. `gh release create` per version; manifest.json lives at
+  repo root on master, update it (new version entry, checksum, sourceUrl) on every
+  tagged release.
 
 ## Standing rules
 
