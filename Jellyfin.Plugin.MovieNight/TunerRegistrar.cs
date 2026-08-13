@@ -12,8 +12,9 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.MovieNight;
 
 /// <summary>
-/// Registers the Movie Night M3U tuner and XMLTV listings provider on startup.
-/// Idempotent: reuses the existing entry (matched by URL) instead of duplicating it.
+/// Registers the Movie Night M3U tuner and XMLTV listings provider once the server is actually
+/// accepting connections. Idempotent: reuses the existing entry (matched by URL) instead of
+/// duplicating it.
 /// </summary>
 public class TunerRegistrar : IHostedService
 {
@@ -24,6 +25,7 @@ public class TunerRegistrar : IHostedService
     private readonly IListingsManager _listingsManager;
     private readonly IServerApplicationHost _appHost;
     private readonly IServerConfigurationManager _configurationManager;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<TunerRegistrar> _logger;
 
     /// <summary>
@@ -33,23 +35,38 @@ public class TunerRegistrar : IHostedService
     /// <param name="listingsManager">Used to persist the XMLTV listings provider entry.</param>
     /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
     /// <param name="configurationManager">Used to read the current Live TV config for idempotency checks.</param>
+    /// <param name="lifetime">Used to defer registration until Kestrel is actually accepting connections.</param>
     /// <param name="logger">Logger.</param>
     public TunerRegistrar(
         ITunerHostManager tunerHostManager,
         IListingsManager listingsManager,
         IServerApplicationHost appHost,
         IServerConfigurationManager configurationManager,
+        IHostApplicationLifetime lifetime,
         ILogger<TunerRegistrar> logger)
     {
         _tunerHostManager = tunerHostManager;
         _listingsManager = listingsManager;
         _appHost = appHost;
         _configurationManager = configurationManager;
+        _lifetime = lifetime;
         _logger = logger;
     }
 
     /// <inheritdoc />
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        // SaveTunerHost validates the M3U by fetching it over loopback HTTP. StartAsync runs during
+        // host startup, before Kestrel is listening, so calling it here gets "Connection refused".
+        // ApplicationStarted fires once the server is actually accepting connections.
+        _lifetime.ApplicationStarted.Register(() => _ = RegisterAsync());
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task RegisterAsync()
     {
         var baseUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight";
         var playlistUrl = $"{baseUrl}/playlist.m3u";
@@ -87,7 +104,4 @@ public class TunerRegistrar : IHostedService
             _logger.LogError(ex, "Movie Night: failed to register tuner/listings provider");
         }
     }
-
-    /// <inheritdoc />
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
