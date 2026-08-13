@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using MediaBrowser.Controller;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.MovieNight.Api;
 
@@ -27,14 +28,17 @@ public class MovieNightController : ControllerBase
     private static readonly Regex SegmentFileNamePattern = new(@"^segment_\d{3}\.ts$", RegexOptions.Compiled);
 
     private readonly IServerApplicationHost _appHost;
+    private readonly ILogger<MovieNightController> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightController"/> class.
     /// </summary>
     /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
-    public MovieNightController(IServerApplicationHost appHost)
+    /// <param name="logger">Logger.</param>
+    public MovieNightController(IServerApplicationHost appHost, ILogger<MovieNightController> logger)
     {
         _appHost = appHost;
+        _logger = logger;
     }
 
     private static string HlsDirectory =>
@@ -71,7 +75,19 @@ public class MovieNightController : ControllerBase
     [HttpGet("stream/{fileName}")]
     public IActionResult GetStreamFile([FromRoute] string fileName)
     {
-        if (!IsLoopbackRequest())
+        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+        var isLoopback = IsLoopbackRequest();
+        var userAgent = HttpContext.Request.Headers.UserAgent.ToString();
+        _logger.LogInformation(
+            "Movie Night: stream request fileName={FileName} remoteIp={RemoteIp} isLoopback={IsLoopback} userAgent={UserAgent} method={Method} protocol={Protocol}",
+            fileName,
+            remoteIp,
+            isLoopback,
+            userAgent,
+            HttpContext.Request.Method,
+            HttpContext.Request.Protocol);
+
+        if (!isLoopback)
         {
             return Forbid();
         }
@@ -80,6 +96,7 @@ public class MovieNightController : ControllerBase
         var isMasterPlaylist = string.Equals(safeName, MasterPlaylistFileName, StringComparison.Ordinal);
         if (!isMasterPlaylist && !SegmentFileNamePattern.IsMatch(safeName))
         {
+            _logger.LogWarning("Movie Night: rejecting fileName={FileName} safeName={SafeName} - matches neither master playlist nor segment pattern", fileName, safeName);
             return NotFound();
         }
 
@@ -90,6 +107,7 @@ public class MovieNightController : ControllerBase
         var fullPath = Path.GetFullPath(Path.Combine(hlsDirectoryFull, safeName));
         if (!fullPath.StartsWith(hlsDirectoryFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
+            _logger.LogWarning("Movie Night: rejecting fullPath={FullPath} - outside hlsDirectoryFull={HlsDirectoryFull}", fullPath, hlsDirectoryFull);
             return NotFound();
         }
 
@@ -97,12 +115,15 @@ public class MovieNightController : ControllerBase
         // model an anchored Regex.IsMatch/exact-literal-equals as sanitization. safeName is provably
         // restricted to "master.m3u8" or ^segment_\d{3}\.ts$, and fullPath is provably inside HlsDirectory.
 #pragma warning disable CA3003
-        if (!System.IO.File.Exists(fullPath))
+        var fileExists = System.IO.File.Exists(fullPath);
+        if (!fileExists)
         {
+            _logger.LogWarning("Movie Night: rejecting fullPath={FullPath} - File.Exists returned false", fullPath);
             return NotFound();
         }
 #pragma warning restore CA3003
 
+        _logger.LogInformation("Movie Night: serving fullPath={FullPath}", fullPath);
         var contentType = isMasterPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t";
         return PhysicalFile(fullPath, contentType);
     }
