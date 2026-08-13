@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.2.0.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.0.0/jellyfin-plugin-movienight_0.2.0.0.zip",
+        "checksum": "9386e3fffc390d5a46edbe7a1eade1e6",
+        "timestamp": "2026-08-13T21:08:09Z",
+        "changelog": "Phase 1 spike: registers an M3U tuner + XMLTV listings provider pointing at a hand-made static HLS test clip. Tuning the channel plays a 15s synthetic test pattern, not a movie yet (BroadcastManager/ffmpeg is Phase 2)."
+      },
+      {
         "version": "0.1.0.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.1.0.0/jellyfin-plugin-movienight_0.1.0.0.zip",
