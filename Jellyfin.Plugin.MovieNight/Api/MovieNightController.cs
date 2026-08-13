@@ -21,6 +21,7 @@ namespace Jellyfin.Plugin.MovieNight.Api;
 public class MovieNightController : ControllerBase
 {
     private const string ChannelName = "Movie Night";
+    private const string MasterPlaylistFileName = "master.m3u8";
 
     // Phase 1 spike: matches only the hand-made static test HLS asset shipped alongside the DLL.
     private static readonly Regex SegmentFileNamePattern = new(@"^segment_\d{3}\.ts$", RegexOptions.Compiled);
@@ -51,54 +52,40 @@ public class MovieNightController : ControllerBase
             return Forbid();
         }
 
-        var streamUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/master.m3u8";
+        var streamUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/{MasterPlaylistFileName}";
         var m3u = $"#EXTM3U\n#EXTINF:-1 tvg-id=\"movienight\" tvg-name=\"{ChannelName}\",{ChannelName}\n{streamUrl}\n";
         return Content(m3u, "application/vnd.apple.mpegurl");
     }
 
     /// <summary>
-    /// The HLS master playlist (hand-made static test asset for the Phase 1 spike).
+    /// Serves the HLS master playlist and its segments (hand-made static test asset for the
+    /// Phase 1 spike) from a single route — <c>master.m3u8</c> and <c>segment_NNN.ts</c> are both
+    /// matched here, dispatched internally. A separate <c>stream/master.m3u8</c> route plus a
+    /// <c>stream/{fileName}</c> route for segments look reasonable but both match the same URL
+    /// shape and ASP.NET Core's routing picked the wrong one in practice (segments' 404 on any
+    /// non-matching name shadowed the literal master.m3u8 route) — one route with explicit
+    /// dispatch removes the ambiguity entirely.
     /// </summary>
-    /// <returns>The master playlist file, 404 if missing, or 403 if the caller isn't loopback.</returns>
-    [HttpGet("stream/master.m3u8")]
-    public IActionResult GetMasterPlaylist()
-    {
-        if (!IsLoopbackRequest())
-        {
-            return Forbid();
-        }
-
-        var path = Path.Combine(HlsDirectory, "master.m3u8");
-        if (!System.IO.File.Exists(path))
-        {
-            return NotFound();
-        }
-
-        return PhysicalFile(path, "application/vnd.apple.mpegurl");
-    }
-
-    /// <summary>
-    /// An individual HLS segment (hand-made static test asset for the Phase 1 spike).
-    /// </summary>
-    /// <param name="fileName">The segment file name, e.g. <c>segment_000.ts</c>.</param>
-    /// <returns>The segment file, 404 if missing/invalid, or 403 if the caller isn't loopback.</returns>
+    /// <param name="fileName">Either <c>master.m3u8</c> or a segment file name like <c>segment_000.ts</c>.</param>
+    /// <returns>The requested file, 404 if missing/invalid, or 403 if the caller isn't loopback.</returns>
     [HttpGet("stream/{fileName}")]
-    public IActionResult GetSegment([FromRoute] string fileName)
+    public IActionResult GetStreamFile([FromRoute] string fileName)
     {
         if (!IsLoopbackRequest())
         {
             return Forbid();
         }
 
-        // Belt-and-suspenders against path traversal: allow-list the name pattern, then re-derive
-        // the path from Path.GetFileName (strips any directory component) and verify the resolved
-        // full path still lands inside HlsDirectory before touching the filesystem.
         var safeName = Path.GetFileName(fileName);
-        if (!SegmentFileNamePattern.IsMatch(safeName))
+        var isMasterPlaylist = string.Equals(safeName, MasterPlaylistFileName, StringComparison.Ordinal);
+        if (!isMasterPlaylist && !SegmentFileNamePattern.IsMatch(safeName))
         {
             return NotFound();
         }
 
+        // Belt-and-suspenders against path traversal: safeName is already restricted to either the
+        // exact literal "master.m3u8" or the anchored segment pattern, then re-verify the resolved
+        // full path still lands inside HlsDirectory before touching the filesystem.
         var hlsDirectoryFull = Path.GetFullPath(HlsDirectory);
         var fullPath = Path.GetFullPath(Path.Combine(hlsDirectoryFull, safeName));
         if (!fullPath.StartsWith(hlsDirectoryFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
@@ -106,9 +93,9 @@ public class MovieNightController : ControllerBase
             return NotFound();
         }
 
-        // CA3003 flags this as tainted despite the regex full-match + prefix checks above: the
-        // analyzer's dataflow doesn't model an anchored Regex.IsMatch as sanitization. safeName is
-        // provably restricted to ^segment_\d{3}\.ts$ and fullPath is provably inside HlsDirectory.
+        // CA3003 flags this as tainted despite the checks above: the analyzer's dataflow doesn't
+        // model an anchored Regex.IsMatch/exact-literal-equals as sanitization. safeName is provably
+        // restricted to "master.m3u8" or ^segment_\d{3}\.ts$, and fullPath is provably inside HlsDirectory.
 #pragma warning disable CA3003
         if (!System.IO.File.Exists(fullPath))
         {
@@ -116,7 +103,8 @@ public class MovieNightController : ControllerBase
         }
 #pragma warning restore CA3003
 
-        return PhysicalFile(fullPath, "video/mp2t");
+        var contentType = isMasterPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t";
+        return PhysicalFile(fullPath, contentType);
     }
 
     /// <summary>
