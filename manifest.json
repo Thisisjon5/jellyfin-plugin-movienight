@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.2.6.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.6.0/jellyfin-plugin-movienight_0.2.6.0.zip",
+        "checksum": "026f91930878530c19a6edf4005d4086",
+        "timestamp": "2026-08-13T22:50:38Z",
+        "changelog": "Root cause found: File.Exists returned false for the extracted hls/master.m3u8 even though it appeared in directory listings - confirmed via a separate host-side read that also got ENOENT on the identical path. A filesystem quirk with zip-extracted plugin files on this NAS, not our code. Fix: embedded the test HLS asset directly into the DLL instead of shipping it as loose files. No more hls/ folder in the release."
+      },
+      {
         "version": "0.2.5.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.5.0/jellyfin-plugin-movienight_0.2.5.0.zip",
