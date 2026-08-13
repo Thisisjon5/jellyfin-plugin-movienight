@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using System.IO;
 using System.Net;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -24,7 +23,14 @@ public class MovieNightController : ControllerBase
     private const string ChannelName = "Movie Night";
     private const string MasterPlaylistFileName = "master.m3u8";
 
-    // Phase 1 spike: matches only the hand-made static test HLS asset shipped alongside the DLL.
+    // Embedded resources (Resources/Hls/*, see the .csproj LogicalName entries) rather than loose
+    // files shipped alongside the DLL: on the target NAS, extracted plugin files appeared in
+    // directory listings but genuinely couldn't be opened (File.Exists returned false, matching a
+    // separate host-side ENOENT on the identical path) - a filesystem quirk with zip extraction in
+    // that environment, not our code. Embedding sidesteps it entirely.
+    private const string EmbeddedResourcePrefix = "Jellyfin.Plugin.MovieNight.Hls.";
+
+    // Phase 1 spike: matches only the hand-made static test HLS asset embedded in the DLL.
     private static readonly Regex SegmentFileNamePattern = new(@"^segment_\d{3}\.ts$", RegexOptions.Compiled);
 
     private readonly IServerApplicationHost _appHost;
@@ -40,9 +46,6 @@ public class MovieNightController : ControllerBase
         _appHost = appHost;
         _logger = logger;
     }
-
-    private static string HlsDirectory =>
-        Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty, "hls");
 
     /// <summary>
     /// One-line M3U pointing at the master playlist. Consumed by Jellyfin's M3U tuner host.
@@ -63,69 +66,40 @@ public class MovieNightController : ControllerBase
 
     /// <summary>
     /// Serves the HLS master playlist and its segments (hand-made static test asset for the
-    /// Phase 1 spike) from a single route — <c>master.m3u8</c> and <c>segment_NNN.ts</c> are both
-    /// matched here, dispatched internally. A separate <c>stream/master.m3u8</c> route plus a
-    /// <c>stream/{fileName}</c> route for segments look reasonable but both match the same URL
-    /// shape and ASP.NET Core's routing picked the wrong one in practice (segments' 404 on any
-    /// non-matching name shadowed the literal master.m3u8 route) — one route with explicit
-    /// dispatch removes the ambiguity entirely.
+    /// Phase 1 spike, embedded in the DLL) from a single route - <c>master.m3u8</c> and
+    /// <c>segment_NNN.ts</c> are both matched here, dispatched internally, so there's no route
+    /// ambiguity between a literal and a parameterized template for the same URL shape.
     /// </summary>
     /// <param name="fileName">Either <c>master.m3u8</c> or a segment file name like <c>segment_000.ts</c>.</param>
     /// <returns>The requested file, 404 if missing/invalid, or 403 if the caller isn't loopback.</returns>
     [HttpGet("stream/{fileName}")]
     public IActionResult GetStreamFile([FromRoute] string fileName)
     {
-        var remoteIp = HttpContext.Connection.RemoteIpAddress;
-        var isLoopback = IsLoopbackRequest();
-        var userAgent = HttpContext.Request.Headers.UserAgent.ToString();
-        _logger.LogInformation(
-            "Movie Night: stream request fileName={FileName} remoteIp={RemoteIp} isLoopback={IsLoopback} userAgent={UserAgent} method={Method} protocol={Protocol}",
-            fileName,
-            remoteIp,
-            isLoopback,
-            userAgent,
-            HttpContext.Request.Method,
-            HttpContext.Request.Protocol);
-
-        if (!isLoopback)
+        if (!IsLoopbackRequest())
         {
             return Forbid();
         }
 
-        var safeName = Path.GetFileName(fileName);
+        var safeName = System.IO.Path.GetFileName(fileName);
         var isMasterPlaylist = string.Equals(safeName, MasterPlaylistFileName, StringComparison.Ordinal);
         if (!isMasterPlaylist && !SegmentFileNamePattern.IsMatch(safeName))
         {
-            _logger.LogWarning("Movie Night: rejecting fileName={FileName} safeName={SafeName} - matches neither master playlist nor segment pattern", fileName, safeName);
             return NotFound();
         }
 
-        // Belt-and-suspenders against path traversal: safeName is already restricted to either the
-        // exact literal "master.m3u8" or the anchored segment pattern, then re-verify the resolved
-        // full path still lands inside HlsDirectory before touching the filesystem.
-        var hlsDirectoryFull = Path.GetFullPath(HlsDirectory);
-        var fullPath = Path.GetFullPath(Path.Combine(hlsDirectoryFull, safeName));
-        if (!fullPath.StartsWith(hlsDirectoryFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        // safeName is provably restricted to "master.m3u8" or ^segment_\d{3}\.ts$ at this point, so
+        // it's safe to use directly as the embedded resource name suffix - no path traversal is
+        // possible since this never touches the filesystem.
+        var resourceName = EmbeddedResourcePrefix + safeName;
+        var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
+        if (stream is null)
         {
-            _logger.LogWarning("Movie Night: rejecting fullPath={FullPath} - outside hlsDirectoryFull={HlsDirectoryFull}", fullPath, hlsDirectoryFull);
+            _logger.LogWarning("Movie Night: embedded resource {ResourceName} not found", resourceName);
             return NotFound();
         }
 
-        // CA3003 flags this as tainted despite the checks above: the analyzer's dataflow doesn't
-        // model an anchored Regex.IsMatch/exact-literal-equals as sanitization. safeName is provably
-        // restricted to "master.m3u8" or ^segment_\d{3}\.ts$, and fullPath is provably inside HlsDirectory.
-#pragma warning disable CA3003
-        var fileExists = System.IO.File.Exists(fullPath);
-        if (!fileExists)
-        {
-            _logger.LogWarning("Movie Night: rejecting fullPath={FullPath} - File.Exists returned false", fullPath);
-            return NotFound();
-        }
-#pragma warning restore CA3003
-
-        _logger.LogInformation("Movie Night: serving fullPath={FullPath}", fullPath);
         var contentType = isMasterPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t";
-        return PhysicalFile(fullPath, contentType);
+        return File(stream, contentType);
     }
 
     /// <summary>

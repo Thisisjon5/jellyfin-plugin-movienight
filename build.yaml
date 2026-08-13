@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.2.5.0"
+version: "0.2.6.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -13,8 +13,16 @@ category: "Live TV"
 owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
-- "hls/"
 changelog: >
+  0.2.6.0: Root cause found via the v0.2.5.0 diagnostic logging: File.Exists
+  returned false for hls/master.m3u8 even though it appeared in directory
+  listings - confirmed via a separate host-side read attempt on the
+  identical path, which got a genuine ENOENT. A filesystem quirk with
+  zip-extracted plugin files on this NAS, not our code. Fix: stopped
+  shipping the test HLS asset as loose files entirely - now embedded
+  directly into the DLL as embedded resources (same pattern as
+  configPage.html), served via Assembly.GetManifestResourceStream. No more
+  hls/ folder in the release zip.
   0.2.5.0: DIAGNOSTIC BUILD. v0.2.4.0's route fix confirmed itself working
   for external requests (a direct browser hit on stream/master.m3u8 got a
   clean 403 Forbid from our own auth handler), but ffmpeg's own transcode
@@ -24,14 +32,6 @@ changelog: >
   Added logging of every stream request's fileName/remoteIp/isLoopback/
   userAgent and exactly which check rejects it, to get a definitive answer
   instead of guessing further.
-  0.2.4.0: Fix route ambiguity - stream/master.m3u8 (literal) and
-  stream/{fileName} (segments) both matched the same URL shape, and the
-  parameterized route was winning, 404ing "master.m3u8" against the segment
-  regex before the literal route ever got a chance. Confirmed via live
-  playback test: registration succeeded and the channel showed in the Live
-  TV guide, but tuning it failed - ffmpeg's own probe hit 404 on our
-  master.m3u8 even though the file existed on disk exactly where expected.
-  Merged both routes into one dispatching action.
   0.2.4.0: Fix route ambiguity - stream/master.m3u8 (literal) and
   stream/{fileName} (segments) both matched the same URL shape, and the
   parameterized route was winning, 404ing "master.m3u8" against the segment
