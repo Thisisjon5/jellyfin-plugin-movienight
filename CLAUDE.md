@@ -4,18 +4,22 @@ Full spec + phased build plan: `planning/SPEC.md` (canonical — don't re-derive
 
 ## Status
 
-Phase 0 (scaffold) complete: template renamed, builds clean on `net9.0` against
-`Jellyfin.Controller`/`Jellyfin.Model` 10.11.6. Install target is the NAS's real
-Jellyfin container ([[jellyfin]], `nas_container_inspect` confirmed image version
-`10.11.6ubu2404-ls24`, host port 8096) — not a throwaway dev instance.
+**Phase 0 — DONE (2026-08-13).** Gate met: plugin installs from the manifest URL
+via the NAS Jellyfin dashboard, restarts clean (`Loaded plugin: Movie Night 0.1.0.0`,
+no errors), config page renders. Confirmed by Jon in-browser.
 
 Repo is public on GitHub: https://github.com/Thisisjon5/jellyfin-plugin-movienight
-(Jon's ruling 2026-08-13, GitHub over Forgejo). v0.1.0.0 tagged, zip released,
-manifest.json committed to master and reachable at
-https://raw.githubusercontent.com/Thisisjon5/jellyfin-plugin-movienight/master/manifest.json.
-Still needs: Jon adds that URL as a Plugin Repository in the NAS Jellyfin dashboard,
-installs, restarts — that's the one remaining GUI step only he can do — then verify
-the config page renders (Phase 0 gate).
+(Jon's ruling 2026-08-13, GitHub over Forgejo). v0.1.0.0 tagged and released;
+manifest.json lives at repo root on master, served at
+https://raw.githubusercontent.com/Thisisjon5/jellyfin-plugin-movienight/master/manifest.json,
+registered as a Plugin Repository named "MovieNight" in the NAS Jellyfin's
+`system.xml`. Install target is the NAS's real Jellyfin container ([[jellyfin]],
+10.11.6ubu2404-ls24, host port 8096) — not a throwaway dev instance.
+
+**Next: Phase 1 — tuner spike** (spec §12, §6). Highest-uncertainty part of the
+project: prove programmatic M3U tuner + XMLTV listing registration works on 10.11.x
+from inside a plugin, using a hand-made static HLS folder. If this gate fails,
+revisit the architecture before writing anything else.
 
 ## Build
 
