@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.2.1.0"
+version: "0.2.2.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -15,6 +15,12 @@ artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 - "hls/"
 changelog: >
+  0.2.2.0: Fix Directory.Build.props - it hardcoded the assembly's actual
+  Version/AssemblyVersion/FileVersion to 0.0.0.0 for every build (an
+  unbumped template placeholder), so once Jellyfin loaded the plugin
+  post-restart it read the real assembly version (0.0.0.0) instead of the
+  catalog metadata and showed "Repository: Unknown". Now kept in sync with
+  this file's version on every release.
   0.2.1.0: Fix startup-ordering bug - tuner/listing registration ran before
   Kestrel was listening, so SaveTunerHost's loopback validation fetch always
   failed with connection refused and nothing ever registered. Now deferred
