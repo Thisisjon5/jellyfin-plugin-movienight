@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.2.4.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.4.0/jellyfin-plugin-movienight_0.2.4.0.zip",
+        "checksum": "60aa523741c7328014f8c8c8a3c864b3",
+        "timestamp": "2026-08-13T22:02:21Z",
+        "changelog": "Fixes a route ambiguity: stream/master.m3u8 and stream/{fileName} both matched the same URL, and the parameterized segment route was winning and 404ing master.m3u8. Confirmed via live playback test - registration worked, channel showed in guide, but tuning failed with this bug. Merged into one dispatching route."
+      },
+      {
         "version": "0.2.3.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.3.0/jellyfin-plugin-movienight_0.2.3.0.zip",
