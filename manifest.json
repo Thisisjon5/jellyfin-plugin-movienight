@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.15.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.15.0/jellyfin-plugin-movienight_0.3.15.0.zip",
+        "checksum": "8b5697ee23dcd596e2391415748d9aaa",
+        "timestamp": "2026-08-14T22:15:00Z",
+        "changelog": "Fixes the dual-writer collision diagnosed right after spike 6's live test (the browser/Roku flip-flop between paused-filler and live-movie content): the movie encoder now writes into its own private directory from Go Live, instead of writing directly into the served HlsDirectory. BroadcastManager owns the served master.m3u8 for the whole broadcast lifetime now, not just after the first pause. Also fixes the stall watchdog and disk guard, which broke as a side effect of HlsDirectory no longer holding segment files."
+      },
+      {
         "version": "0.3.14.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.14.0/jellyfin-plugin-movienight_0.3.14.0.zip",
