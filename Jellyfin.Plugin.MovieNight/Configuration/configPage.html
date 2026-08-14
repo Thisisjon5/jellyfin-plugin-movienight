@@ -146,7 +146,25 @@
                     }
                 });
 
+                // Disables a button for the duration of an in-flight request so a double-click (or
+                // an impatient re-click while Go Live's own up-to-30s wait is still pending) can't
+                // fire the same action twice. Found necessary live, 2026-08-14: a double Go Live
+                // click raced past a server-side check-then-act gap and spawned two ffmpeg
+                // processes writing into the same directory - fixed server-side too, but this is
+                // the cheap first line of defense against the thing that actually triggers it.
+                function withButtonDisabled(button, action) {
+                    if (button.disabled) {
+                        return;
+                    }
+
+                    button.disabled = true;
+                    action().finally(function () {
+                        button.disabled = false;
+                    });
+                }
+
                 document.querySelector('#MovieNightGoLive').addEventListener('click', function () {
+                    var button = this;
                     var itemId = document.querySelector('#MovieNightItemId').value.trim();
                     var channelName = document.querySelector('#MovieNightChannelName').value.trim() || 'Movie Night';
                     if (!itemId) {
@@ -154,34 +172,42 @@
                         return;
                     }
 
-                    ApiClient.ajax({
-                        type: 'POST',
-                        url: apiUrl('golive'),
-                        data: JSON.stringify({ ItemId: itemId, ChannelName: channelName }),
-                        contentType: 'application/json',
-                    }).then(poll).catch(function () {
-                        Dashboard.alert('Go Live failed - check status below and server logs.');
-                        poll();
+                    withButtonDisabled(button, function () {
+                        return ApiClient.ajax({
+                            type: 'POST',
+                            url: apiUrl('golive'),
+                            data: JSON.stringify({ ItemId: itemId, ChannelName: channelName }),
+                            contentType: 'application/json',
+                        }).then(poll).catch(function () {
+                            Dashboard.alert('Go Live failed - check status below and server logs.');
+                            poll();
+                        });
                     });
                 });
 
                 document.querySelector('#MovieNightStop').addEventListener('click', function () {
-                    ApiClient.ajax({
-                        type: 'POST',
-                        url: apiUrl('stop'),
-                    }).then(poll).catch(function () {
-                        poll();
+                    var button = this;
+                    withButtonDisabled(button, function () {
+                        return ApiClient.ajax({
+                            type: 'POST',
+                            url: apiUrl('stop'),
+                        }).then(poll).catch(function () {
+                            poll();
+                        });
                     });
                 });
 
                 document.querySelector('#MovieNightPauseResume').addEventListener('click', function () {
+                    var button = this;
                     var action = (lastStatus && lastStatus.IsPaused) ? 'resume' : 'pause';
-                    ApiClient.ajax({
-                        type: 'POST',
-                        url: apiUrl(action),
-                    }).then(poll).catch(function () {
-                        Dashboard.alert(action + ' failed - check status below and server logs.');
-                        poll();
+                    withButtonDisabled(button, function () {
+                        return ApiClient.ajax({
+                            type: 'POST',
+                            url: apiUrl(action),
+                        }).then(poll).catch(function () {
+                            Dashboard.alert(action + ' failed - check status below and server logs.');
+                            poll();
+                        });
                     });
                 });
 

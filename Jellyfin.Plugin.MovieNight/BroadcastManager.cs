@@ -195,13 +195,32 @@ public sealed class BroadcastManager : IDisposable
         }
 #pragma warning restore CA3003
 
+        // Re-check AND claim Starting atomically, in one lock, immediately before the only await
+        // in this method. Found via a real live bug (2026-08-14): the earlier version re-checked
+        // at the top of the method but only flipped _state to Starting AFTER awaiting ProbeAsync -
+        // two Go Live calls close together (e.g. a double-click, now trivial to trigger from the
+        // config page's own button) could both pass that early check before either one claimed the
+        // state, both proceed to spawn ffmpeg into the same MovieDirectory, and stomp each other -
+        // one process's CleanDirectory() call wipes the other's segments out from under it before
+        // its own startup-detection loop ever sees them, so it looks like it's "encoding fine" per
+        // its own stderr but never produces a detectable segment and times out at 30s regardless.
+        lock (_lock)
+        {
+            if (_state is BroadcastState.Starting or BroadcastState.Live)
+            {
+                _logger.LogWarning("Movie Night: Go Live requested while already {State}, ignoring", _state);
+                return false;
+            }
+
+            SetStartingUnlocked(channelName, item.Name, item.RunTimeTicks);
+        }
+
         if (!await ProbeAsync(item.Path, cancellationToken).ConfigureAwait(false))
         {
             SetFailed($"ffprobe could not read {item.Path} - file may be corrupt or an unsupported container");
             return false;
         }
 
-        SetStarting(channelName, item.Name, item.RunTimeTicks);
         CleanHlsDirectory();
         CleanDirectory(MovieDirectory);
 
@@ -1266,17 +1285,14 @@ public sealed class BroadcastManager : IDisposable
         return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output);
     }
 
-    private void SetStarting(string channelName, string nowPlaying, long? runTimeTicks)
+    private void SetStartingUnlocked(string channelName, string nowPlaying, long? runTimeTicks)
     {
-        lock (_lock)
-        {
-            _state = BroadcastState.Starting;
-            _channelName = channelName;
-            _nowPlaying = nowPlaying;
-            _startedAtUtc = null;
-            _runTimeTicks = runTimeTicks;
-            _lastFailureReason = null;
-        }
+        _state = BroadcastState.Starting;
+        _channelName = channelName;
+        _nowPlaying = nowPlaying;
+        _startedAtUtc = null;
+        _runTimeTicks = runTimeTicks;
+        _lastFailureReason = null;
     }
 
     private void SetFailed(string reason)
