@@ -5,14 +5,13 @@
     <title>Movie Night</title>
 </head>
 <body>
-    <div id="MovieNightConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
+    <div id="MovieNightConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox" data-controller="__plugin/configurationpage">
         <div data-role="content">
             <div class="content-primary">
+                <h2>Broadcast</h2>
                 <p>
-                    <strong>Phase 2 test harness.</strong> This is a bare-bones dev control panel -
-                    paste a movie's item ID (visible in its details page URL as
-                    <code>?id=...</code>), pick a channel name, and Go Live. The real movie
-                    picker/subtitle/quality UI is Phase 3.
+                    Paste a movie's item ID (visible in its details page URL as
+                    <code>?id=...</code>), pick a channel name, and Go Live.
                 </p>
 
                 <div class="inputContainer">
@@ -32,23 +31,80 @@
                     <button id="MovieNightStop" is="emby-button" type="button" class="raised block emby-button">
                         <span>Stop</span>
                     </button>
+                    <button id="MovieNightPauseResume" is="emby-button" type="button" class="raised block emby-button">
+                        <span>Pause</span>
+                    </button>
                 </div>
 
                 <h3>Status</h3>
                 <pre id="MovieNightStatus">(loading...)</pre>
+
+                <h2>Client sessions</h2>
+                <p>Live state read straight from Jellyfin's session manager - useful for checking whether a client is actually paused/playing without switching devices.</p>
+                <button id="MovieNightRefreshSessions" is="emby-button" type="button" class="raised block emby-button">
+                    <span>Refresh sessions</span>
+                </button>
+                <pre id="MovieNightSessions">(not loaded)</pre>
+
+                <h2>Spike test channels</h2>
+                <p>
+                    Off by default so the Live TV channel list only shows what you're actually
+                    testing. Toggling these takes effect within a few seconds (forces a guide
+                    refresh on save).
+                </p>
+
+                <div class="checkboxContainer">
+                    <label>
+                        <input id="MovieNightEnableRawTs" type="checkbox" is="emby-checkbox" />
+                        <span>Enable "Movie Night (raw TS spike)" channel</span>
+                    </label>
+                </div>
+                <div class="checkboxContainer">
+                    <label>
+                        <input id="MovieNightEnableSwitcher" type="checkbox" is="emby-checkbox" />
+                        <span>Enable "Movie Night (switcher spike)" channel</span>
+                    </label>
+                </div>
+                <button id="MovieNightSaveSpikeChannels" is="emby-button" type="button" class="raised button-submit block emby-button">
+                    <span>Save spike channel settings</span>
+                </button>
+
+                <h3>Switcher spike controls</h3>
+                <p>Tune the "Movie Night (switcher spike)" channel first, then pick an input to switch to live.</p>
+                <div>
+                    <button id="MovieNightSwitcherInput0" is="emby-button" type="button" class="raised block emby-button">
+                        <span>Switch to input 0 (blue)</span>
+                    </button>
+                    <button id="MovieNightSwitcherInput1" is="emby-button" type="button" class="raised block emby-button">
+                        <span>Switch to input 1 (maroon)</span>
+                    </button>
+                    <button id="MovieNightSwitcherInput2" is="emby-button" type="button" class="raised block emby-button">
+                        <span>Switch to input 2 (green)</span>
+                    </button>
+                </div>
+                <pre id="MovieNightSwitcherResult"></pre>
             </div>
         </div>
 
         <script type="text/javascript">
             (function () {
+                var pluginId = '8a6e5cf0-30f3-420a-a8ce-e7704d690f94';
                 var pollTimer = null;
+                var lastStatus = null;
 
                 function apiUrl(path) {
                     return ApiClient.getUrl('MovieNight/api/' + path);
                 }
 
+                function debugUrl(path) {
+                    return ApiClient.getUrl('MovieNight/api/debug/' + path);
+                }
+
                 function renderStatus(status) {
+                    lastStatus = status;
                     document.querySelector('#MovieNightStatus').textContent = JSON.stringify(status, null, 2);
+                    var pauseResumeButton = document.querySelector('#MovieNightPauseResume span');
+                    pauseResumeButton.textContent = status.IsPaused ? 'Resume' : 'Pause';
                 }
 
                 function poll() {
@@ -57,9 +113,30 @@
                     });
                 }
 
+                function pollSessions() {
+                    ApiClient.getJSON(debugUrl('sessions')).then(function (sessions) {
+                        document.querySelector('#MovieNightSessions').textContent = JSON.stringify(sessions, null, 2);
+                    }).catch(function (err) {
+                        document.querySelector('#MovieNightSessions').textContent = 'sessions request failed: ' + err;
+                    });
+                }
+
+                function loadConfig() {
+                    return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        document.querySelector('#MovieNightEnableRawTs').checked = !!config.EnableRawTsSpikeChannel;
+                        document.querySelector('#MovieNightEnableSwitcher').checked = !!config.EnableSwitcherSpikeChannel;
+                        return config;
+                    });
+                }
+
                 document.querySelector('#MovieNightConfigPage').addEventListener('pageshow', function () {
                     poll();
-                    pollTimer = setInterval(poll, 3000);
+                    pollSessions();
+                    loadConfig();
+                    pollTimer = setInterval(function () {
+                        poll();
+                        pollSessions();
+                    }, 3000);
                 });
 
                 document.querySelector('#MovieNightConfigPage').addEventListener('pagehide', function () {
@@ -96,6 +173,49 @@
                         poll();
                     });
                 });
+
+                document.querySelector('#MovieNightPauseResume').addEventListener('click', function () {
+                    var action = (lastStatus && lastStatus.IsPaused) ? 'resume' : 'pause';
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: apiUrl(action),
+                    }).then(poll).catch(function () {
+                        Dashboard.alert(action + ' failed - check status below and server logs.');
+                        poll();
+                    });
+                });
+
+                document.querySelector('#MovieNightRefreshSessions').addEventListener('click', pollSessions);
+
+                document.querySelector('#MovieNightSaveSpikeChannels').addEventListener('click', function () {
+                    loadConfig().then(function (config) {
+                        config.EnableRawTsSpikeChannel = document.querySelector('#MovieNightEnableRawTs').checked;
+                        config.EnableSwitcherSpikeChannel = document.querySelector('#MovieNightEnableSwitcher').checked;
+                        return ApiClient.updatePluginConfiguration(pluginId, config);
+                    }).then(function () {
+                        return ApiClient.ajax({ type: 'POST', url: apiUrl('refresh-channels') });
+                    }).then(function () {
+                        Dashboard.processPluginConfigurationUpdateResult();
+                    }).catch(function () {
+                        Dashboard.alert('Failed to save spike channel settings.');
+                    });
+                });
+
+                function switcherSelect(input) {
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: debugUrl('switcher-select?input=' + input),
+                        dataType: 'text',
+                    }).then(function (result) {
+                        document.querySelector('#MovieNightSwitcherResult').textContent = 'OK: ' + result;
+                    }).catch(function (err) {
+                        document.querySelector('#MovieNightSwitcherResult').textContent = 'Failed: ' + (err && err.responseText ? err.responseText : err);
+                    });
+                }
+
+                document.querySelector('#MovieNightSwitcherInput0').addEventListener('click', function () { switcherSelect(0); });
+                document.querySelector('#MovieNightSwitcherInput1').addEventListener('click', function () { switcherSelect(1); });
+                document.querySelector('#MovieNightSwitcherInput2').addEventListener('click', function () { switcherSelect(2); });
             })();
         </script>
     </div>

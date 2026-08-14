@@ -29,37 +29,11 @@ public class MovieNightDebugController : ControllerBase
     /// Initializes a new instance of the <see cref="MovieNightDebugController"/> class.
     /// </summary>
     /// <param name="sessionManager">Used to read session play state and push playstate commands.</param>
-    /// <param name="broadcastManager">Used to swap the running encoder for the freeze/unfreeze spike.</param>
+    /// <param name="broadcastManager">Used to drive the switcher spike.</param>
     public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager)
     {
         _sessionManager = sessionManager;
         _broadcastManager = broadcastManager;
-    }
-
-    /// <summary>
-    /// Spike 5: pauses by splicing a background filler encoder into the served playlist with
-    /// EXT-X-DISCONTINUITY (see planning/DECISIONS.md "mechanism replaced: filler-channel
-    /// splice") - replaces spike 4's SIGSTOP approach, which worked mechanically but desynced
-    /// across clients due to Jellyfin's own remux hop.
-    /// </summary>
-    /// <returns>200 if the splice to filler succeeded, 409 if the broadcast isn't Live or is already paused.</returns>
-    [HttpPost("freeze")]
-    public async Task<ActionResult> Freeze()
-    {
-        var ok = await _broadcastManager.Pause().ConfigureAwait(false);
-        return ok ? Ok() : Conflict();
-    }
-
-    /// <summary>
-    /// Spike 5 counterpart: kills the filler, respawns the movie a little before the pause point,
-    /// and splices back once it's confirmed flowing.
-    /// </summary>
-    /// <returns>200 if the splice back to the movie succeeded, 409 if the broadcast isn't paused.</returns>
-    [HttpPost("unfreeze")]
-    public async Task<ActionResult> Unfreeze()
-    {
-        var ok = await _broadcastManager.Resume().ConfigureAwait(false);
-        return ok ? Ok() : Conflict();
     }
 
     /// <summary>

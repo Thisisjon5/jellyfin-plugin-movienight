@@ -61,4 +61,41 @@ public class MovieNightApiController : ControllerBase
         await _broadcastManager.StopAsync().ConfigureAwait(false);
         return Ok(_broadcastManager.GetStatus());
     }
+
+    /// <summary>
+    /// Pauses the live broadcast for every viewer - splices the served output to the always-warm
+    /// filler encoder (see <see cref="BroadcastManager.Pause"/>). The real, user-facing version of
+    /// what was previously only reachable via the debug controller.
+    /// </summary>
+    /// <returns>The resulting status, 409 if the broadcast isn't live or is already paused.</returns>
+    [HttpPost("pause")]
+    public async Task<ActionResult<BroadcastStatus>> Pause()
+    {
+        var ok = await _broadcastManager.Pause().ConfigureAwait(false);
+        return ok ? Ok(_broadcastManager.GetStatus()) : Conflict(_broadcastManager.GetStatus());
+    }
+
+    /// <summary>
+    /// Resumes a paused broadcast for every viewer (see <see cref="BroadcastManager.Resume"/>).
+    /// </summary>
+    /// <returns>The resulting status, 409 if the broadcast isn't paused.</returns>
+    [HttpPost("resume")]
+    public async Task<ActionResult<BroadcastStatus>> Resume()
+    {
+        var ok = await _broadcastManager.Resume().ConfigureAwait(false);
+        return ok ? Ok(_broadcastManager.GetStatus()) : Conflict(_broadcastManager.GetStatus());
+    }
+
+    /// <summary>
+    /// Forces an immediate guide refresh - called after the admin toggles which spike test
+    /// channels are enabled in plugin config, so the channel list picks up the change right away
+    /// instead of waiting for the next automatic refresh.
+    /// </summary>
+    /// <returns>200 once the refresh has been triggered.</returns>
+    [HttpPost("refresh-channels")]
+    public ActionResult RefreshChannels()
+    {
+        _broadcastManager.RefreshChannelsGuide();
+        return Ok();
+    }
 }

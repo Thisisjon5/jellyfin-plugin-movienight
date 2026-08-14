@@ -11,10 +11,12 @@ namespace Jellyfin.Plugin.MovieNight;
 /// <param name="StartedAtUtc">When the broadcast transitioned to <see cref="BroadcastState.Live"/>.</param>
 /// <param name="RunTimeTicks">The source item's runtime, if known - used to size the EPG programme block.</param>
 /// <param name="LastFailureReason">A human-readable reason for the most recent <see cref="BroadcastState.Failed"/> transition.</param>
+/// <param name="IsPaused">Whether the broadcast is currently paused (served output pointed at the filler, not the movie).</param>
 public sealed record BroadcastStatus(
     BroadcastState State,
     string? ChannelName,
     string? NowPlaying,
     DateTime? StartedAtUtc,
     long? RunTimeTicks,
-    string? LastFailureReason);
+    string? LastFailureReason,
+    bool IsPaused);

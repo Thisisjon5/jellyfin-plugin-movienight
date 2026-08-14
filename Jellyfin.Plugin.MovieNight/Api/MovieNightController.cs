@@ -80,13 +80,20 @@ public class MovieNightController : ControllerBase
             m3u += $"#EXTINF:-1 tvg-id=\"movienight\" tvg-name=\"{channelName}\",{channelName}\n{streamUrl}\n";
         }
 
-        // Always listed, independent of broadcast state - see StartRawTsSpikeProcess for why.
-        var rawTsUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/live.ts";
-        m3u += $"#EXTINF:-1 tvg-id=\"{RawTsSpikeChannelId}\" tvg-name=\"{RawTsSpikeChannelName}\",{RawTsSpikeChannelName}\n{rawTsUrl}\n";
+        // Both spike channels are opt-in via plugin config (Jon's call, 2026-08-14: the channel
+        // list should only show what's actually being tested, not everything all the time).
+        var config = Plugin.Instance?.Configuration;
+        if (config?.EnableRawTsSpikeChannel == true)
+        {
+            var rawTsUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/live.ts";
+            m3u += $"#EXTINF:-1 tvg-id=\"{RawTsSpikeChannelId}\" tvg-name=\"{RawTsSpikeChannelName}\",{RawTsSpikeChannelName}\n{rawTsUrl}\n";
+        }
 
-        // Always listed too - see StartSwitcherSpikeProcess for why.
-        var switcherUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/switcher.ts";
-        m3u += $"#EXTINF:-1 tvg-id=\"{SwitcherSpikeChannelId}\" tvg-name=\"{SwitcherSpikeChannelName}\",{SwitcherSpikeChannelName}\n{switcherUrl}\n";
+        if (config?.EnableSwitcherSpikeChannel == true)
+        {
+            var switcherUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/switcher.ts";
+            m3u += $"#EXTINF:-1 tvg-id=\"{SwitcherSpikeChannelId}\" tvg-name=\"{SwitcherSpikeChannelName}\",{SwitcherSpikeChannelName}\n{switcherUrl}\n";
+        }
 
         return Content(m3u, "application/vnd.apple.mpegurl");
     }
@@ -211,13 +218,40 @@ public class MovieNightController : ControllerBase
         var stop = start + duration;
         const string Format = "yyyyMMddHHmmss +0000";
 
-        // SPIKE (raw MPEG-TS tuner feed / single-process switcher): both test channels are always
-        // tunable (see GetPlaylist), so their guide blocks are a fixed rolling window rather than
-        // tied to broadcast state.
-        var rawTsStart = DateTime.UtcNow;
-        var rawTsStop = rawTsStart + TimeSpan.FromHours(4);
-        var switcherStart = DateTime.UtcNow;
-        var switcherStop = switcherStart + TimeSpan.FromHours(4);
+        // Both spike channels are opt-in via plugin config - see GetPlaylist. Their guide blocks
+        // are a fixed rolling window rather than tied to broadcast state, since they're always
+        // tunable whenever enabled.
+        var config = Plugin.Instance?.Configuration;
+        var spikeBlocks = string.Empty;
+        if (config?.EnableRawTsSpikeChannel == true)
+        {
+            var rawTsStart = DateTime.UtcNow;
+            var rawTsStop = rawTsStart + TimeSpan.FromHours(4);
+            spikeBlocks += $"""
+                  <channel id="{RawTsSpikeChannelId}">
+                    <display-name>{RawTsSpikeChannelName}</display-name>
+                  </channel>
+                  <programme start="{rawTsStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{rawTsStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{RawTsSpikeChannelId}">
+                    <title>{RawTsSpikeChannelName}</title>
+                  </programme>
+
+                """;
+        }
+
+        if (config?.EnableSwitcherSpikeChannel == true)
+        {
+            var switcherStart = DateTime.UtcNow;
+            var switcherStop = switcherStart + TimeSpan.FromHours(4);
+            spikeBlocks += $"""
+                  <channel id="{SwitcherSpikeChannelId}">
+                    <display-name>{SwitcherSpikeChannelName}</display-name>
+                  </channel>
+                  <programme start="{switcherStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{switcherStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{SwitcherSpikeChannelId}">
+                    <title>{SwitcherSpikeChannelName}</title>
+                  </programme>
+
+                """;
+        }
 
         var xml = $"""
             <?xml version="1.0" encoding="UTF-8"?>
@@ -228,19 +262,7 @@ public class MovieNightController : ControllerBase
               <programme start="{start.ToString(Format, CultureInfo.InvariantCulture)}" stop="{stop.ToString(Format, CultureInfo.InvariantCulture)}" channel="movienight">
                 <title>{title}</title>
               </programme>
-              <channel id="{RawTsSpikeChannelId}">
-                <display-name>{RawTsSpikeChannelName}</display-name>
-              </channel>
-              <programme start="{rawTsStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{rawTsStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{RawTsSpikeChannelId}">
-                <title>{RawTsSpikeChannelName}</title>
-              </programme>
-              <channel id="{SwitcherSpikeChannelId}">
-                <display-name>{SwitcherSpikeChannelName}</display-name>
-              </channel>
-              <programme start="{switcherStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{switcherStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{SwitcherSpikeChannelId}">
-                <title>{SwitcherSpikeChannelName}</title>
-              </programme>
-            </tv>
+            {spikeBlocks}</tv>
             """;
 
         return Content(xml, "application/xml");

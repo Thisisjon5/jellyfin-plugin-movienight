@@ -159,7 +159,7 @@ public sealed class BroadcastManager : IDisposable
     {
         lock (_lock)
         {
-            return new BroadcastStatus(_state, _channelName, _nowPlaying, _startedAtUtc, _runTimeTicks, _lastFailureReason);
+            return new BroadcastStatus(_state, _channelName, _nowPlaying, _startedAtUtc, _runTimeTicks, _lastFailureReason, _isPaused);
         }
     }
 
@@ -1439,6 +1439,13 @@ public sealed class BroadcastManager : IDisposable
 
         return total;
     }
+
+    /// <summary>
+    /// Public wrapper around <see cref="TriggerGuideRefresh"/> - lets the config API force a guide
+    /// refresh after the admin toggles which spike test channels are enabled, so the change is
+    /// reflected in Jellyfin's channel list without waiting for the next automatic refresh.
+    /// </summary>
+    public void RefreshChannelsGuide() => TriggerGuideRefresh();
 
     /// <summary>
     /// Fires an immediate guide refresh in the background, without blocking the caller - guide-based
