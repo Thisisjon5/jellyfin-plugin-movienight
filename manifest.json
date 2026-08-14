@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.5.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.5.0/jellyfin-plugin-movienight_0.3.5.0.zip",
+        "checksum": "b40b4b5ed26a34ef7ff67898346ea4c8",
+        "timestamp": "2026-08-14T17:17:35Z",
+        "changelog": "Spike 3 for universal pause: freeze/unfreeze the shared encoder instead of pushing a playstate command to each client (spike 2 found that doesn't work). Adds BroadcastManager.FreezeAsync/UnfreezeAsync + debug endpoints /MovieNight/api/debug/freeze and /unfreeze. Debug-only, not the real feature."
+      },
+      {
         "version": "0.3.4.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.4.0/jellyfin-plugin-movienight_0.3.4.0.zip",
