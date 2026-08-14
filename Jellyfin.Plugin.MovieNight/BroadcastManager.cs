@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
@@ -34,6 +35,7 @@ public sealed class BroadcastManager : IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IServerConfigurationManager _configurationManager;
+    private readonly IGuideManager _guideManager;
     private readonly ILogger<BroadcastManager> _logger;
 
     private Process? _process;
@@ -55,16 +57,22 @@ public sealed class BroadcastManager : IDisposable
     /// and (via <see cref="IServerConfigurationManager.ApplicationPaths"/>) a writable directory for
     /// HLS output - deriving it this way avoids depending on <see cref="IApplicationPaths"/> being
     /// separately DI-registered.</param>
+    /// <param name="guideManager">Used to force an immediate guide refresh on every state change -
+    /// the built-in "Refresh Guide" scheduled task only runs once every 24h by default (confirmed
+    /// via a live test where a client showed "no schedule information" the entire broadcast), so
+    /// without this a real movie-length broadcast would still finish before the guide caught up.</param>
     /// <param name="logger">Logger.</param>
     public BroadcastManager(
         ILibraryManager libraryManager,
         IMediaEncoder mediaEncoder,
         IServerConfigurationManager configurationManager,
+        IGuideManager guideManager,
         ILogger<BroadcastManager> logger)
     {
         _libraryManager = libraryManager;
         _mediaEncoder = mediaEncoder;
         _configurationManager = configurationManager;
+        _guideManager = guideManager;
         _logger = logger;
         HlsDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "hls");
     }
@@ -203,6 +211,7 @@ public sealed class BroadcastManager : IDisposable
 
                 _logger.LogInformation("Movie Night: broadcast live, playing {Path}", item.Path);
                 StartWatchdog();
+                TriggerGuideRefresh();
                 return true;
             }
 
@@ -274,6 +283,8 @@ public sealed class BroadcastManager : IDisposable
             _process = null;
             _stderrTail = null;
         }
+
+        TriggerGuideRefresh();
     }
 
     private static HardwareAccel MapHardwareAccel(MediaBrowser.Model.Entities.HardwareAccelerationType type) =>
@@ -388,6 +399,7 @@ public sealed class BroadcastManager : IDisposable
         }
 
         StopWatchdog();
+        TriggerGuideRefresh();
     }
 
     private static int SafeGetExitCode(Process process)
@@ -489,6 +501,28 @@ public sealed class BroadcastManager : IDisposable
         {
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Fires an immediate guide refresh in the background, without blocking the caller - guide-based
+    /// clients (e.g. Roku) read the channel's now-playing info from the guide, not the M3U/EPG
+    /// endpoints directly, and the built-in "Refresh Guide" task only runs once every 24h by
+    /// default. Fire-and-forget with logged failure rather than awaited: it took ~3s in testing,
+    /// and neither Go Live nor Stop should wait on it to respond.
+    /// </summary>
+    private void TriggerGuideRefresh()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _guideManager.RefreshGuide(new Progress<double>(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Movie Night: guide refresh after broadcast state change failed");
+            }
+        });
     }
 
     private void CleanHlsDirectory()
