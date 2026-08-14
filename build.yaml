@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.8.0"
+version: "0.3.9.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,13 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.9.0: Fixes a resume-crash bug found in the 0.3.8.0 live test - Resume()
+  copied the resumed movie's first segment into the served directory once,
+  but never restarted the periodic splice timer, so the served playlist
+  stopped updating a few seconds after resume even though the movie encoder
+  itself was running fine (confirmed real-time, healthy, in its own private
+  directory). Our own 30s stall watchdog then killed the whole broadcast.
+  Resume() now restarts the splice timer, same as Pause() does.
   0.3.8.0: Fixes spike 5's live test failure - the filler encoder now starts
   running continuously right after Go Live instead of on-demand at pause
   time. The on-demand version left a gap of a few seconds between killing

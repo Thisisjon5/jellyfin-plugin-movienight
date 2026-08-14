@@ -437,6 +437,7 @@ public sealed class BroadcastManager : IDisposable
             _activeSourceCursor = fillerCursor;
             _pendingDiscontinuityOnNextCopy = true;
             StopWatchdogUnlocked();
+            StopSpliceTimerUnlocked();
         }
 
         SpliceTick();
@@ -529,6 +530,7 @@ public sealed class BroadcastManager : IDisposable
         }
 
         SpliceTick();
+        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
         StartWatchdog();
         _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
         return true;
