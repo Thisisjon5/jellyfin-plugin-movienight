@@ -441,7 +441,12 @@ public sealed class BroadcastManager : IDisposable
             StopSpliceTimerUnlocked();
         }
 
-        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.Zero, TimeSpan.FromSeconds(SpliceTickSeconds));
+        // Restored to 0.3.9.0's proven pattern (2026-08-14 A/B test: 0.3.9.0 paused clean,
+        // 0.3.10.0 did not, only variable was this trigger). A guaranteed synchronous splice
+        // before the timer starts, with the timer's own first tick a full SpliceTickSeconds
+        // later, gives more headroom before any possible overlap than dueTime: Zero did.
+        SpliceTick();
+        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
         _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to already-warm filler", elapsedSeconds);
         return true;
     }
