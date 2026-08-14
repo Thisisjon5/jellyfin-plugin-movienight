@@ -317,3 +317,149 @@ underlying command primitive doesn't fire on a Live TV session anyway.
    system).
 3. Rewind/fast-forward host-button scope (paused-position-only vs.
    also-live) — see ruling above.
+
+---
+
+## 2026-08-14 — Switcher architecture reframed: single-process input-switch + raw-TS-tuner spikes queued
+
+**Context:** after the filler-splice mechanism (spike 5) and the pointer/
+private-directory generalization (spike 6, see `BroadcastManager.Pause`/
+`Resume`/`SpliceTick`/`WriteServedPlaylist`/`ResolveServedFilePath`) were
+built and live-tested, Jon named the general shape himself: "then we have 4
+encoders: welcome, pause, movie, end. The whole thing is that we're pointing
+the live stream at any one of the encoders." This conversation confirmed
+that framing, then Jon pushed further on *how* to build it, reopening
+whether the current approach (N independent encoders, outputs stitched by a
+hand-written HLS playlist) is the right shape at all.
+
+### Ruling: 4-source pointer model confirmed correct
+
+Jon's "welcome, movie, pause, goodbye, plugin points the live stream at
+whichever one is needed" is the right architecture. Every bug hit while
+building spike 5/6 was a *lifecycle transition* race (cold-start gaps,
+kill-timing races, two-writers-one-file), not a flaw in the pointer/splice
+mechanism itself — which is already generic and source-count-agnostic
+(`SpliceTick`/`WriteServedPlaylist` read from a generic `_activeSourceDirectory`/
+`_activeSourcePrefix`, `ResolveServedFilePath` resolves any prefix to its
+directory). Extending it from 2 sources to 4 is additive, not a redesign of
+that core.
+
+### Ruling: try both a single-process/multi-input switcher AND a raw
+MPEG-TS tuner feed as spikes — not an either/or choice
+
+Jon: "I feel like single process with inputs makes sense to try as does raw
+mpeg tuner. No reason not to try both."
+
+- **Single-process/multi-input switcher:** one continuous ffmpeg process
+  holds multiple `-i` inputs open simultaneously (welcome loop, pause loop,
+  goodbye loop, plus the movie), with a `streamselect`-style filter choosing
+  which one feeds the output, controlled live via ffmpeg's `zmq`/`sendcmd`
+  filter commands. This is the standard broadcast-switcher pattern (switch
+  upstream of one continuous encode, not stitch together N encoders'
+  outputs downstream) and would eliminate discontinuity-marker/playlist-
+  stitching complexity for the three static sources entirely — one
+  ever-incrementing segment sequence, zero cold starts on switch between
+  those three. **Does not solve movie seek/rewind** (see below) — ffmpeg's
+  `zmq`/`sendcmd` control plane only reaches filter-graph parameters on
+  already-open inputs, not a live re-seek of an open input; `-ss` is a
+  demuxer-open-time parameter only. This is a hard ffmpeg constraint, not a
+  design choice.
+- **Raw MPEG-TS tuner feed instead of HLS:** point the M3U tuner entry at a
+  raw continuous MPEG-TS stream URL rather than an HLS playlist. Real
+  hardware tuners (HDHomeRun, what Jellyfin's Live TV tuner subsystem was
+  originally built around) serve exactly this, and Jellyfin's tuner path
+  already inserts its own remux hop regardless of source type (confirmed
+  earlier this session) — so it likely doesn't care whether our URL is HLS
+  or raw TS. If confirmed, this eliminates the entire hand-written-HLS-
+  playlist risk surface (segment-window bookkeeping, discontinuity
+  sequencing) since HLS would become something only Jellyfin manages,
+  downstream of us. **Unverified — flagged as a spike, not a confirmed
+  fact.**
+
+### Ruling: restart-based seek for the movie source stays as-is; a
+feeder-pipe architecture is available but explicitly deferred
+
+Jon proposed mapping host pause/rewind buttons directly to an ffmpeg
+command. Corrected in-conversation: ffmpeg has no live-reseek primitive for
+an open input, so real seek (pause/rewind/resume) requires restarting the
+movie encoder at a new `-ss` offset regardless of which switcher
+architecture is chosen — this was true before this conversation and remains
+true. Named explicitly: **the restart-for-seek approach itself was never
+the actual bug** — every failure to date was a race in teardown/warmup
+timing around a restart, not restart latency being visible to viewers; the
+already-built warm-switch discipline (never cut to a source before it's
+rolling, never tear down the old one before the new one's ready) already
+hides that latency.
+
+- **Available if restart-for-seek turns out to still be a problem after the
+  race bugs are fixed:** a feeder-pipe architecture — a separate, small,
+  freely-restartable process decodes/seeks the movie and writes raw frames
+  into a pipe that the single continuous switcher reads as one more input.
+  Only the feeder restarts on a seek; the switcher itself never stops. This
+  is the true baseband-switch pattern from real broadcast (decode once,
+  switch on raw frames, encode once downstream of the switch).
+- **Ruling: not in scope now.** Build only if restart-for-seek is proven to
+  actually cause a visible problem once the current race bugs are fixed —
+  not worth building preemptively.
+
+### Ruling: native-pause-button stretch goal — one half already dead, one
+half genuinely untested (not the same thing)
+
+Corrected a conflation made mid-conversation: `SendPlaystateCommand` (host
+force-pushing a pause command to a client session) was tested against
+Firefox only and confirmed not honored (200 OK, no effect) — that mechanism
+is dead, but only confirmed dead on the one client it was tested against.
+**Native pause detection via session polling** (`PlayState.IsPaused`/
+`PositionTicks` — the mechanism the stretch goal actually needs: detect a
+client already paused itself, then react server-side) was only ever tested
+against web. Jon: "we never tested it because I never pressed pause on
+roku" — Roku's Live TV tuner session pause-reporting behavior is genuinely
+unverified, not settled dead or alive, and Roku is the client this project
+already treats as the pickiest tier-1 test.
+
+**Ruling: add Roku native-pause-detection testing to the next spike round.**
+Jon: "Sure."
+
+### Spike queue (final, this conversation — Jon: "I think we have enough")
+
+1. Single-process/multi-input switcher (`streamselect` via `zmq`) for
+   welcome/pause/goodbye/movie-passthrough switching.
+2. Raw MPEG-TS tuner feed instead of HLS — verify Jellyfin's M3U tuner
+   accepts a raw continuous-stream URL and remuxes it the same way it does
+   HLS.
+3. Roku native-pause-detection via session polling (`PlayState.IsPaused`),
+   specifically on Roku — not yet exercised on that client at all.
+
+### Known gaps in the current implementation, surfaced this conversation
+(not yet fixed, not blocking the spikes above)
+
+Read directly from `BroadcastManager.cs`/`FfmpegCommandBuilder.cs`/
+`MovieNightController.cs` during this conversation, not from memory:
+
+- `WriteServedPlaylist` hardcodes `EXT-X-MEDIA-SEQUENCE:0` on every write
+  instead of tracking the real rolling sequence number, and never emits
+  `EXT-X-DISCONTINUITY-SEQUENCE` at all — both are real RFC 8216
+  requirements for a live playlist and both are unverified against a picky
+  client (Roku). Not yet caused a visible failure, but not proven safe
+  either. Relevant only if the hand-written-HLS-playlist path survives the
+  raw-TS-tuner spike above; moot if that spike succeeds.
+- Only one non-movie encoder exists in code today (the filler/pause-card
+  slot), and it's a synthetic `color=c=maroon` test pattern — no real
+  welcome or goodbye content or bundled asset exists yet.
+- The state machine has no concept of "stream started, no movie selected
+  yet" — `GoLiveAsync` requires an `itemId` up front, conflating "start
+  stream" and "select movie" into one action, not yet split into the two
+  separate host buttons Jon's control-surface ruling calls for.
+- No goodbye phase exists — natural end goes straight to `Ended` with no
+  switch to thank-you content.
+- Rewind/fast-forward buttons are unbuilt (scope still open per the
+  original ruling above).
+
+### Ecosystem grounding note
+
+ffplayout (open source, Rust — continuous live HLS output with a
+scheduled/looping source and a switchable live-ingest override) remains the
+closest open-source analog to the single-process-switcher pattern and is
+still unread in depth (flagged in the prior entry, still true). Reading its
+splice/switch internals before finalizing the spec requires an agent with
+web/repo-fetch access, not available in this conversation.

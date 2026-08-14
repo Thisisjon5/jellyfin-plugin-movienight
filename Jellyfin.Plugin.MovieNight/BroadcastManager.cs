@@ -73,6 +73,7 @@ public sealed class BroadcastManager : IDisposable
     private int _activeSourceCursor;
     private bool _pendingDiscontinuityOnNextCopy;
     private bool _spliceTickRunning;
+    private DateTime? _lastServedSegmentUtc;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BroadcastManager"/> class.
@@ -101,14 +102,26 @@ public sealed class BroadcastManager : IDisposable
         _guideManager = guideManager;
         _logger = logger;
         HlsDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "hls");
+        MovieDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "movie");
         FillerDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "filler");
         ResumedMovieDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "resume");
     }
 
     /// <summary>
-    /// Gets the directory the current (or most recent) broadcast's HLS output lives in.
+    /// Gets the directory the served master.m3u8 lives in - the only thing BroadcastManager ever
+    /// writes here is that hand-authored playlist (see <see cref="WriteServedPlaylist"/>); no
+    /// encoder writes segments into this directory. Kept separate from every source's own output
+    /// directory (<see cref="MovieDirectory"/>, <see cref="FillerDirectory"/>,
+    /// <see cref="ResumedMovieDirectory"/>) so BroadcastManager is the sole writer of this path for
+    /// the whole broadcast lifetime, not just after the first pause - two writers racing on this
+    /// same file (ffmpeg's own live muxer plus this class) was a real bug found 2026-08-14.
     /// </summary>
     public string HlsDirectory { get; }
+
+    /// <summary>
+    /// Gets the directory the live/original movie encoder writes into.
+    /// </summary>
+    private string MovieDirectory { get; }
 
     /// <summary>
     /// Gets the directory the background filler (pause-card) encoder writes into. Not copied
@@ -189,10 +202,11 @@ public sealed class BroadcastManager : IDisposable
 
         SetStarting(channelName, item.Name, item.RunTimeTicks);
         CleanHlsDirectory();
+        CleanDirectory(MovieDirectory);
 
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var accel = MapHardwareAccel(encodingOptions.HardwareAccelerationType);
-        var args = FfmpegCommandBuilder.Build(item.Path, HlsDirectory, accel, encodingOptions.VaapiDevice);
+        var args = FfmpegCommandBuilder.Build(item.Path, MovieDirectory, accel, encodingOptions.VaapiDevice);
         _currentItemPath = item.Path;
         _currentAccel = accel;
         _currentVaapiDevice = encodingOptions.VaapiDevice;
@@ -238,11 +252,10 @@ public sealed class BroadcastManager : IDisposable
             _stderrTail = stderrTail;
         }
 
-        var masterPlaylistPath = Path.Combine(HlsDirectory, "master.m3u8");
         var deadline = DateTime.UtcNow.AddSeconds(StartupTimeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
-            if (HasHlsOutput(masterPlaylistPath))
+            if (Directory.Exists(MovieDirectory) && Directory.EnumerateFiles(MovieDirectory, "segment_*.ts").Any())
             {
                 lock (_lock)
                 {
@@ -250,8 +263,21 @@ public sealed class BroadcastManager : IDisposable
                     {
                         _state = BroadcastState.Live;
                         _startedAtUtc = DateTime.UtcNow;
+
+                        // BroadcastManager owns the served master.m3u8 for the entire broadcast,
+                        // from this first activation - not just after the first pause. The movie
+                        // encoder above writes segment_NNN.ts into its own private MovieDirectory
+                        // and never touches HlsDirectory, so there's only ever one writer of the
+                        // served playlist (see the HlsDirectory doc comment for the bug this fixes).
+                        _activeSourceDirectory = MovieDirectory;
+                        _activeSourcePrefix = "segment_";
+                        _activeSourceCursor = 0;
+                        _pendingDiscontinuityOnNextCopy = false;
                     }
                 }
+
+                SpliceTick();
+                _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
 
                 _logger.LogInformation("Movie Night: broadcast live, playing {Path}", item.Path);
                 StartWatchdog();
@@ -341,6 +367,7 @@ public sealed class BroadcastManager : IDisposable
             _activeSourceCursor = 0;
             _servedSegments.Clear();
             _pendingDiscontinuityOnNextCopy = false;
+            _lastServedSegmentUtc = null;
         }
 
         TriggerGuideRefresh();
@@ -430,16 +457,12 @@ public sealed class BroadcastManager : IDisposable
 
         // Point the served output at the already-warm filler immediately - fast, no waiting, and
         // (per Jon) the movie encoder is simply left running rather than killed here. It's not
-        // colliding with anything: it keeps writing segment_NNN.ts into HlsDirectory exactly as
-        // it always has, while the served playlist below is now referencing filler_NNN.ts from a
-        // different directory entirely. It gets torn down at the start of Resume() instead.
+        // colliding with anything: it keeps writing segment_NNN.ts into its own private
+        // MovieDirectory exactly as it always has, while the served playlist below is now
+        // referencing filler_NNN.ts from a different directory entirely. It gets torn down at the
+        // start of Resume() instead.
         lock (_lock)
         {
-            if (_servedSegments.Count == 0)
-            {
-                SeedServedSegmentsFromExistingHlsDirectoryUnlocked();
-            }
-
             _pausedAtSeconds = elapsedSeconds;
             _isPaused = true;
             _activeSourceDirectory = FillerDirectory;
@@ -801,38 +824,6 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
-    /// Called under <see cref="_lock"/> the first time a broadcast ever pauses: seeds
-    /// <see cref="_servedSegments"/> from whatever <c>segment_*.ts</c> files the movie encoder
-    /// (still running, per Pause()'s "let it run" design) has already produced in
-    /// <see cref="HlsDirectory"/>, so the served playlist continues from where the client already
-    /// is rather than jumping backwards.
-    /// </summary>
-    private void SeedServedSegmentsFromExistingHlsDirectoryUnlocked()
-    {
-        if (!Directory.Exists(HlsDirectory))
-        {
-            return;
-        }
-
-        var files = Directory.EnumerateFiles(HlsDirectory, "segment_*.ts")
-            .Select(Path.GetFileName)
-            .Where(f => f is not null)
-            .Select(f => f!)
-            .OrderBy(f => f, StringComparer.Ordinal)
-            .ToList();
-
-        foreach (var file in files)
-        {
-            _servedSegments.Add((file, SplicedSegmentSeconds, false));
-        }
-
-        if (_servedSegments.Count > ServedWindowSize)
-        {
-            _servedSegments.RemoveRange(0, _servedSegments.Count - ServedWindowSize);
-        }
-    }
-
-    /// <summary>
     /// Points the served playlist at whatever new segments the currently-active source (filler or
     /// a resumed movie) has produced since the last tick - no file copying, per Jon: "what we've
     /// built is largely a pointer for an HLS stream, we need to seamlessly transition pointing
@@ -906,6 +897,7 @@ public sealed class BroadcastManager : IDisposable
                 }
 
                 _activeSourceCursor = cursor + 1;
+                _lastServedSegmentUtc = DateTime.UtcNow;
             }
 
             cursor++;
@@ -920,7 +912,7 @@ public sealed class BroadcastManager : IDisposable
 
     /// <summary>
     /// Resolves a requested segment filename to its actual physical directory, by prefix -
-    /// <c>segment_</c> is the live/original movie in <see cref="HlsDirectory"/>, <c>filler_</c> is
+    /// <c>segment_</c> is the live/original movie in <see cref="MovieDirectory"/>, <c>filler_</c> is
     /// the always-running filler, <c>resume_</c> is a resumed movie. Used by
     /// <c>MovieNightController</c> so it never needs to know these directories exist; also
     /// re-verifies the resolved path lands inside the target directory (path-traversal guard) and
@@ -934,7 +926,7 @@ public sealed class BroadcastManager : IDisposable
         {
             _ when safeName.StartsWith("filler_", StringComparison.Ordinal) => FillerDirectory,
             _ when safeName.StartsWith("resume_", StringComparison.Ordinal) => ResumedMovieDirectory,
-            _ when safeName.StartsWith("segment_", StringComparison.Ordinal) => HlsDirectory,
+            _ when safeName.StartsWith("segment_", StringComparison.Ordinal) => MovieDirectory,
             _ => null,
         };
 
@@ -1036,22 +1028,6 @@ public sealed class BroadcastManager : IDisposable
             MediaBrowser.Model.Entities.HardwareAccelerationType.amf => HardwareAccel.Amf,
             _ => HardwareAccel.None,
         };
-
-    private static bool HasHlsOutput(string masterPlaylistPath)
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(masterPlaylistPath);
-            return File.Exists(masterPlaylistPath)
-                && dir is not null
-                && Directory.EnumerateFiles(dir, "*.ts").Any();
-        }
-        catch (IOException)
-        {
-            // Segment/playlist files can be mid-write; treat as "not ready yet" rather than failing.
-            return false;
-        }
-    }
 
     private async Task<bool> ProbeAsync(string path, CancellationToken cancellationToken)
     {
@@ -1206,7 +1182,7 @@ public sealed class BroadcastManager : IDisposable
                 return;
             }
 
-            var diskUsage = GetHlsDirectorySize();
+            var diskUsage = GetActiveEncodersDiskUsage();
             if (diskUsage > DiskGuardBytes)
             {
                 _logger.LogError("Movie Night: HLS output directory exceeded the {LimitMb}MB disk guard ({ActualMb}MB) - segment deletion may not be keeping up", DiskGuardBytes / 1024 / 1024, diskUsage / 1024 / 1024);
@@ -1217,44 +1193,44 @@ public sealed class BroadcastManager : IDisposable
         }
     }
 
-    private bool IsSegmentStale()
+    /// <summary>
+    /// Called under <see cref="_lock"/> from <see cref="CheckWatchdog"/>. Checks the served
+    /// output's own progress (<see cref="_lastServedSegmentUtc"/>, stamped by
+    /// <see cref="SpliceTickCore"/>) rather than scanning any one source directory for fresh
+    /// files - the thing that actually matters is whether the SERVED playlist is still advancing,
+    /// since that's what Jellyfin's downstream remux treats as "stream ended" if it stalls. Before
+    /// this fix, the watchdog scanned <see cref="HlsDirectory"/> for <c>*.ts</c> files directly,
+    /// which broke once that directory stopped holding segments at all (see the HlsDirectory doc
+    /// comment).
+    /// </summary>
+    private bool IsSegmentStale() =>
+        _lastServedSegmentUtc is null
+            || DateTime.UtcNow - _lastServedSegmentUtc.Value > TimeSpan.FromSeconds(SegmentStallSeconds);
+
+    /// <summary>
+    /// Sums the on-disk size of every directory an encoder can currently be writing segments into
+    /// - <see cref="HlsDirectory"/> itself only ever holds the small hand-written master.m3u8 text
+    /// file now, so it's excluded.
+    /// </summary>
+    private long GetActiveEncodersDiskUsage()
     {
-        try
+        long total = 0;
+        foreach (var dir in new[] { MovieDirectory, FillerDirectory, ResumedMovieDirectory })
         {
-            if (!Directory.Exists(HlsDirectory))
+            try
             {
-                return true;
+                if (Directory.Exists(dir))
+                {
+                    total += Directory.EnumerateFiles(dir).Sum(f => new FileInfo(f).Length);
+                }
             }
-
-            var latestWrite = Directory.EnumerateFiles(HlsDirectory, "*.ts")
-                .Select(f => new FileInfo(f).LastWriteTimeUtc)
-                .DefaultIfEmpty(DateTime.MinValue)
-                .Max();
-
-            return latestWrite == DateTime.MinValue
-                || DateTime.UtcNow - latestWrite > TimeSpan.FromSeconds(SegmentStallSeconds);
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
-
-    private long GetHlsDirectorySize()
-    {
-        try
-        {
-            if (!Directory.Exists(HlsDirectory))
+            catch (IOException)
             {
-                return 0;
+                // Skip; a directory mid-write shouldn't fail the whole disk-guard check.
             }
+        }
 
-            return Directory.EnumerateFiles(HlsDirectory).Sum(f => new FileInfo(f).Length);
-        }
-        catch (IOException)
-        {
-            return 0;
-        }
+        return total;
     }
 
     /// <summary>
