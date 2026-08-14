@@ -32,7 +32,7 @@ public sealed class BroadcastManager : IDisposable
     private const int SegmentStallSeconds = 30;
     private const long DiskGuardBytes = 2L * 1024 * 1024 * 1024;
     private const int Sigterm = 15;
-    private const int RewindSeconds = 15;
+    private const int RewindSeconds = 60;
     private const int SplicedSegmentSeconds = 4;
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
@@ -72,6 +72,7 @@ public sealed class BroadcastManager : IDisposable
     private int _activeSourceCursor;
     private int _nextSegmentIndex;
     private bool _pendingDiscontinuityOnNextCopy;
+    private bool _spliceTickRunning;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BroadcastManager"/> class.
@@ -440,8 +441,7 @@ public sealed class BroadcastManager : IDisposable
             StopSpliceTimerUnlocked();
         }
 
-        SpliceTick();
-        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
+        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.Zero, TimeSpan.FromSeconds(SpliceTickSeconds));
         _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to already-warm filler", elapsedSeconds);
         return true;
     }
@@ -529,8 +529,7 @@ public sealed class BroadcastManager : IDisposable
             _nextSegmentIndex = nextIndex; // preserved across the pause/resume for this splice pass
         }
 
-        SpliceTick();
-        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
+        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.Zero, TimeSpan.FromSeconds(SpliceTickSeconds));
         StartWatchdog();
         _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
         return true;
@@ -774,10 +773,39 @@ public sealed class BroadcastManager : IDisposable
     /// Copies any new segments the currently-active splice source has produced into
     /// <see cref="HlsDirectory"/> under continuing <see cref="_nextSegmentIndex"/> numbers, marks
     /// the first copied segment with a discontinuity if one is pending, and rewrites the served
-    /// playlist. Runs on a timer while spliced (<see cref="_spliceTimer"/>) and once immediately
-    /// after every splice transition.
+    /// playlist. Runs on <see cref="_spliceTimer"/> only - Pause()/Resume() no longer also call
+    /// this directly; that dual-trigger (call once, then also start the timer) was the actual bug
+    /// behind the resume-after-pause failure, not just a missing lock: the manual call and the
+    /// timer's own next tick could both be mid-copy at once, racing to write the same segment
+    /// filename. This guard is a backstop in case a copy is ever slow enough for two ticks to
+    /// overlap regardless.
     /// </summary>
     private void SpliceTick()
+    {
+        lock (_lock)
+        {
+            if (_spliceTickRunning)
+            {
+                return;
+            }
+
+            _spliceTickRunning = true;
+        }
+
+        try
+        {
+            SpliceTickCore();
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _spliceTickRunning = false;
+            }
+        }
+    }
+
+    private void SpliceTickCore()
     {
         string? sourceDir;
         string sourcePrefix;
