@@ -36,6 +36,8 @@ public sealed class BroadcastManager : IDisposable
     private const int SplicedSegmentSeconds = 4;
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
+    private const int PauseTeardownDelaySeconds = 60;
+    private const int ResumeWarmupBufferSeconds = 30;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -388,7 +390,7 @@ public sealed class BroadcastManager : IDisposable
     /// wall-clock elapsed time, not parsed from ffmpeg, per the DECISIONS.md ruling.
     /// </summary>
     /// <returns><c>true</c> if the splice to filler succeeded.</returns>
-    public async Task<bool> Pause()
+    public Task<bool> Pause()
     {
         string? itemPath;
         DateTime? startedAt;
@@ -396,7 +398,7 @@ public sealed class BroadcastManager : IDisposable
         {
             if (_state != BroadcastState.Live || _isPaused)
             {
-                return false;
+                return Task.FromResult(false);
             }
 
             itemPath = _currentItemPath;
@@ -405,7 +407,7 @@ public sealed class BroadcastManager : IDisposable
 
         if (itemPath is null)
         {
-            return false;
+            return Task.FromResult(false);
         }
 
         // The filler has been running continuously since Go Live (StartFillerEncoderInBackground) -
@@ -417,13 +419,20 @@ public sealed class BroadcastManager : IDisposable
         if (fillerCursor < 0)
         {
             _logger.LogError("Movie Night: spike 5 - background filler has no segments ready yet, can't splice");
-            return false;
+            return Task.FromResult(false);
         }
 
         var elapsedSeconds = startedAt is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0;
+        Process? staleMovieProcess;
+        lock (_lock)
+        {
+            staleMovieProcess = _process;
+        }
 
-        await KillActiveEncoderForSpliceAsync().ConfigureAwait(false);
-
+        // Switch the served output to the already-warm filler immediately - fast, no waiting.
+        // The movie encoder is deliberately NOT killed here (see below): per Jon, this is a
+        // video switcher, and a switcher doesn't tear down the old source the instant it cuts
+        // away - it keeps it live until it's confident every viewer has actually moved over.
         lock (_lock)
         {
             if (_servedSegments.Count == 0)
@@ -448,7 +457,17 @@ public sealed class BroadcastManager : IDisposable
         SpliceTick();
         _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
         _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to already-warm filler", elapsedSeconds);
-        return true;
+
+        // Grace window: only tear down the old movie encoder once we've given every client a
+        // real chance to have moved over to the filler. A fixed delay is a simple stand-in for
+        // "confirmed every client switched" - a real per-session ack would be more precise but
+        // isn't available here. Fire-and-forget: doesn't block Pause() from returning.
+        if (staleMovieProcess is not null)
+        {
+            _ = Task.Run(() => TeardownStaleProcessAfterGraceAsync(staleMovieProcess, PauseTeardownDelaySeconds, "movie encoder after pause"));
+        }
+
+        return Task.FromResult(true);
     }
 
     private int GetLatestFillerSegmentIndex()
@@ -521,6 +540,11 @@ public sealed class BroadcastManager : IDisposable
             _logger.LogError("Movie Night: spike 5 - resumed movie encoder did not produce a segment in time");
             return false;
         }
+
+        // Per Jon: don't cut to the new source the instant a single segment exists - let it run
+        // long enough to build a real rolling buffer first. The filler keeps serving the whole
+        // time, so nothing user-visible is lost by waiting.
+        await Task.Delay(TimeSpan.FromSeconds(ResumeWarmupBufferSeconds)).ConfigureAwait(false);
 
         // The already-running splice timer picks up this change on its next tick (within
         // SpliceTickSeconds) - no separate restart needed, and _nextSegmentIndex is read fresh
@@ -621,45 +645,88 @@ public sealed class BroadcastManager : IDisposable
     };
 
     /// <summary>
-    /// Kills whichever encoder is currently active, for a deliberate splice transition rather than
-    /// a real stop - marks the exit as intentional first so <see cref="OnProcessExited"/> doesn't
-    /// treat it as a crash or natural end.
+    /// Waits <paramref name="delaySeconds"/> (the pause/resume grace window - see Pause()), then
+    /// kills <paramref name="staleProcess"/> - a specific captured process reference, not
+    /// necessarily whatever <see cref="_process"/> currently is, since a resume (or another
+    /// pause) may have already reassigned it by the time this fires. Only suppresses
+    /// <see cref="OnProcessExited"/> for this kill if <paramref name="staleProcess"/> is still
+    /// the tracked current process at that moment; if it's already been superseded, its exit
+    /// event correctly no-ops on its own via the existing reference-equality check there.
     /// </summary>
-    private async Task KillActiveEncoderForSpliceAsync()
+    private async Task TeardownStaleProcessAfterGraceAsync(Process staleProcess, int delaySeconds, string description)
     {
-        Process? process;
-        lock (_lock)
+        try
         {
-            _suppressExitHandling = true;
-            process = _process;
-        }
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ConfigureAwait(false);
 
-        if (process is null || process.HasExited)
+            bool suppressed;
+            lock (_lock)
+            {
+                suppressed = ReferenceEquals(_process, staleProcess);
+                if (suppressed)
+                {
+                    _suppressExitHandling = true;
+                }
+            }
+
+            await KillProcessGracefullyAsync(staleProcess).ConfigureAwait(false);
+
+            if (suppressed)
+            {
+                lock (_lock)
+                {
+                    _suppressExitHandling = false;
+                }
+            }
+
+            _logger.LogInformation("Movie Night: spike 5 - tore down stale {Description}", description);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Movie Night: spike 5 - failed to tear down stale {Description}", description);
+        }
+    }
+
+    /// <summary>
+    /// SIGTERM, grace period, SIGKILL - on an arbitrary given process, not necessarily
+    /// <see cref="_process"/>. Shared by the delayed pause/resume teardown paths.
+    /// </summary>
+    private async Task KillProcessGracefullyAsync(Process process)
+    {
+        if (process.HasExited)
         {
             return;
         }
 
         if (!TrySendSigterm(process))
         {
-            lock (_lock)
+            TryKillDirectly(process);
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
+        try
+        {
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillDirectly(process);
+        }
+    }
+
+    private static void TryKillDirectly(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
             {
-                KillProcessUnlocked();
+                process.Kill();
             }
         }
-        else
+        catch (InvalidOperationException)
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
-            try
-            {
-                await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                lock (_lock)
-                {
-                    KillProcessUnlocked();
-                }
-            }
+            // Already exited between the check and Kill(); nothing to do.
         }
     }
 
