@@ -953,6 +953,81 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
+    /// SPIKE (raw MPEG-TS tuner feed, 2026-08-14, per Jon: "I feel like single process with inputs
+    /// makes sense to try as does raw mpeg tuner. No reason not to try both."): spawns a standalone
+    /// synthetic testsrc/tone encoder writing raw <c>-f mpegts</c> to stdout, for
+    /// <c>MovieNightController</c> to pipe straight through to whatever client connects. Answers
+    /// one open architectural question - does Jellyfin's M3U tuner accept and remux a raw
+    /// continuous MPEG-TS stream URL the same way it does our hand-rolled HLS - without touching
+    /// any of the real broadcast's state machine, encoders, or directories. Debug-only: a fresh
+    /// process per connection (no reuse across reconnects), same model as a real hardware tuner
+    /// only ever having one downstream reader at a time. If this direction is chosen for real, the
+    /// remaining open question is fan-out to multiple simultaneous readers of one live encode -
+    /// not addressed here, out of scope for a yes/no spike.
+    /// </summary>
+    /// <returns>The started process (stdout piped, not yet read from), or <c>null</c> on failure to start.</returns>
+    public Process? StartRawTsSpikeProcess()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in BuildRawTsSpikeArgs())
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            return Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: raw-TS spike - failed to start test encoder");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Stops a process started by <see cref="StartRawTsSpikeProcess"/> - called once the HTTP
+    /// client that was reading its stdout disconnects.
+    /// </summary>
+    /// <param name="process">The process to stop and dispose.</param>
+    public void StopRawTsSpikeProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited between the check and Kill(); nothing to do.
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static List<string> BuildRawTsSpikeArgs() => new List<string>
+    {
+        "-re", "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30",
+        "-re", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+        "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+        "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+        "-f", "mpegts",
+        "pipe:1",
+    };
+
+    /// <summary>
     /// Hand-writes <c>HlsDirectory/master.m3u8</c> from <see cref="_servedSegments"/> - once a
     /// broadcast has spliced at least once, ffmpeg never writes this file directly again, because
     /// its own live-HLS muxer would just overwrite the discontinuity markers this class inserts.

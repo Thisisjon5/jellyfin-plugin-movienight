@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.15.0"
+version: "0.3.16.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,22 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.16.0: Raw MPEG-TS tuner spike, queued by the architect conversation
+  alongside the single-process switcher and Roku native-pause-detection
+  spikes (see planning/DECISIONS.md 2026-08-14). Adds a second, always-
+  tunable test channel ("Movie Night (raw TS spike)") completely
+  independent of the real broadcast's state machine: tuning it spawns a
+  fresh synthetic testsrc/tone ffmpeg process writing raw -f mpegts
+  straight to stdout, piped directly to the client - no HLS, no playlist,
+  no segment files. Answers one open architectural question: does
+  Jellyfin's M3U tuner accept and remux a raw continuous-stream URL the
+  same way it does our hand-rolled HLS? If yes, this eliminates the entire
+  hand-written-HLS-playlist risk surface (segment-window bookkeeping,
+  EXT-X-DISCONTINUITY sequencing, the MEDIA-SEQUENCE/DISCONTINUITY-SEQUENCE
+  gaps already flagged as unverified) for the real channel too. Debug-only,
+  does not touch BroadcastManager's real state, encoders, or directories -
+  the fan-out-to-multiple-simultaneous-viewers question is deliberately out
+  of scope for this yes/no spike.
   0.3.15.0: Fixes the dual-writer collision diagnosed right after spike 6 -
   the movie encoder now writes into its own private directory
   (MovieDirectory) from the moment Go Live starts, instead of writing

@@ -3,6 +3,8 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -21,6 +23,11 @@ public class MovieNightController : ControllerBase
 {
     private const string DefaultChannelName = "Movie Night";
     private const string MasterPlaylistFileName = "master.m3u8";
+
+    // SPIKE (raw MPEG-TS tuner feed, see planning/DECISIONS.md 2026-08-14): a second, always-
+    // tunable test channel independent of BroadcastManager's own Live state - see GetRawTsSpikeStream.
+    private const string RawTsSpikeChannelId = "movienightrawts";
+    private const string RawTsSpikeChannelName = "Movie Night (raw TS spike)";
 
     // ffmpeg's -hls_segment_filename uses %03d (minimum 3 digits, not a cap) - a broadcast running
     // past segment 999 (i.e. beyond ~66 minutes at 4s/segment) produces 4+ digit names, so this
@@ -59,15 +66,60 @@ public class MovieNightController : ControllerBase
         }
 
         var status = _broadcastManager.GetStatus();
-        if (status.State != BroadcastState.Live)
+        var m3u = "#EXTM3U\n";
+        if (status.State == BroadcastState.Live)
         {
-            return Content("#EXTM3U\n", "application/vnd.apple.mpegurl");
+            var channelName = status.ChannelName ?? DefaultChannelName;
+            var streamUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/{MasterPlaylistFileName}";
+            m3u += $"#EXTINF:-1 tvg-id=\"movienight\" tvg-name=\"{channelName}\",{channelName}\n{streamUrl}\n";
         }
 
-        var channelName = status.ChannelName ?? DefaultChannelName;
-        var streamUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/{MasterPlaylistFileName}";
-        var m3u = $"#EXTM3U\n#EXTINF:-1 tvg-id=\"movienight\" tvg-name=\"{channelName}\",{channelName}\n{streamUrl}\n";
+        // Always listed, independent of broadcast state - see StartRawTsSpikeProcess for why.
+        var rawTsUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/live.ts";
+        m3u += $"#EXTINF:-1 tvg-id=\"{RawTsSpikeChannelId}\" tvg-name=\"{RawTsSpikeChannelName}\",{RawTsSpikeChannelName}\n{rawTsUrl}\n";
+
         return Content(m3u, "application/vnd.apple.mpegurl");
+    }
+
+    /// <summary>
+    /// SPIKE (raw MPEG-TS tuner feed, see planning/DECISIONS.md 2026-08-14): pipes a fresh
+    /// synthetic testsrc/tone ffmpeg process's raw MPEG-TS stdout straight to the client, instead
+    /// of the hand-rolled HLS the real channel uses. Answers whether Jellyfin's M3U tuner accepts
+    /// and remuxes a raw continuous-stream URL the same way it does HLS - see
+    /// <see cref="BroadcastManager.StartRawTsSpikeProcess"/>. Independent of the real broadcast's
+    /// state entirely; debug-only.
+    /// </summary>
+    /// <param name="cancellationToken">Bound to the HTTP request - lets the encoder be killed the moment the client disconnects.</param>
+    /// <returns>A task that completes once the client disconnects or the encoder exits.</returns>
+    [HttpGet("stream/live.ts")]
+    public async Task GetRawTsSpikeStream(CancellationToken cancellationToken)
+    {
+        if (!IsLoopbackRequest())
+        {
+            HttpContext.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+            return;
+        }
+
+        var process = _broadcastManager.StartRawTsSpikeProcess();
+        if (process is null)
+        {
+            HttpContext.Response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
+            return;
+        }
+
+        HttpContext.Response.ContentType = "video/mp2t";
+        try
+        {
+            await process.StandardOutput.BaseStream.CopyToAsync(HttpContext.Response.Body, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Client disconnected - expected, not an error.
+        }
+        finally
+        {
+            _broadcastManager.StopRawTsSpikeProcess(process);
+        }
     }
 
     /// <summary>
@@ -128,6 +180,11 @@ public class MovieNightController : ControllerBase
         var stop = start + duration;
         const string Format = "yyyyMMddHHmmss +0000";
 
+        // SPIKE (raw MPEG-TS tuner feed): the test channel is always tunable (see GetPlaylist), so
+        // its guide block is a fixed rolling window rather than tied to broadcast state.
+        var rawTsStart = DateTime.UtcNow;
+        var rawTsStop = rawTsStart + TimeSpan.FromHours(4);
+
         var xml = $"""
             <?xml version="1.0" encoding="UTF-8"?>
             <tv>
@@ -136,6 +193,12 @@ public class MovieNightController : ControllerBase
               </channel>
               <programme start="{start.ToString(Format, CultureInfo.InvariantCulture)}" stop="{stop.ToString(Format, CultureInfo.InvariantCulture)}" channel="movienight">
                 <title>{title}</title>
+              </programme>
+              <channel id="{RawTsSpikeChannelId}">
+                <display-name>{RawTsSpikeChannelName}</display-name>
+              </channel>
+              <programme start="{rawTsStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{rawTsStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{RawTsSpikeChannelId}">
+                <title>{RawTsSpikeChannelName}</title>
               </programme>
             </tv>
             """;
