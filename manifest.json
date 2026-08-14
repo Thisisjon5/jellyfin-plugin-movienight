@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.18.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.18.0/jellyfin-plugin-movienight_0.3.18.0.zip",
+        "checksum": "fafd8ce41ad8cb0059d4b186a501580b",
+        "timestamp": "2026-08-14T23:20:00Z",
+        "changelog": "Real self-service controls on the config page: a Pause/Resume toggle button next to Go Live/Stop (promoted from debug-only endpoints to real /MovieNight/api/pause and /resume), a client-sessions panel, and checkboxes to enable/disable the raw-TS and switcher spike test channels (off by default - they no longer show up in the Live TV channel list unless explicitly turned on). No curl commands needed to drive any of this anymore."
+      },
+      {
         "version": "0.3.17.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.17.0/jellyfin-plugin-movienight_0.3.17.0.zip",
