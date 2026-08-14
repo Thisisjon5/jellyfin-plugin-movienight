@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.2.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.2.0/jellyfin-plugin-movienight_0.3.2.0.zip",
+        "checksum": "7ccc2fb47c582e1754cadd82fbe2e932",
+        "timestamp": "2026-08-14T14:46:10Z",
+        "changelog": "Second real QSV failure from the same live Go Live test, found right after 0.3.1.0's fix cleared the first one: scale_qsv rejects the round-to-even \"-2\" width value libavfilter's software scale and scale_vaapi accept (\"Size values less than -1 are not acceptable\") - QSV only accepts -1. Changed scale_qsv's width arg from -2 to -1."
+      },
+      {
         "version": "0.3.1.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.1.0/jellyfin-plugin-movienight_0.3.1.0.zip",
