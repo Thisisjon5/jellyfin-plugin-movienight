@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.16.0"
+version: "0.3.17.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,23 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.17.0: Single-process/multi-input switcher spike, the other spike
+  queued alongside the raw-TS tuner test (see planning/DECISIONS.md
+  2026-08-14). Adds a third always-tunable test channel ("Movie Night
+  (switcher spike)"): one continuous ffmpeg process holds three synthetic
+  color/tone inputs open simultaneously (standing in for the real welcome/
+  pause/goodbye assets, which don't exist yet), switched live via a
+  streamselect filter controlled over ffmpeg's zmq socket - a new debug
+  endpoint (POST /MovieNight/api/debug/switcher-select?input=N) fires the
+  switch via ffmpeg's own bundled zmqsend helper. Deliberately does not
+  attempt movie seek/switching - ffmpeg has no live-reseek primitive for an
+  open input regardless of switcher architecture, per the ruling; this
+  spike only tests whether lossless switching among static sources
+  survives Jellyfin's own remux hop, and whether this NAS's jellyfin-ffmpeg
+  build even includes libzmq support (zmqsend may simply not exist, which
+  is itself a valid answer). Refactors the raw-TS spike's process-to-
+  response-body piping into a shared PipeRawTsProcessAsync helper, reused
+  by both spike endpoints.
   0.3.16.0: Raw MPEG-TS tuner spike, queued by the architect conversation
   alongside the single-process switcher and Roku native-pause-detection
   spikes (see planning/DECISIONS.md 2026-08-14). Adds a second, always-

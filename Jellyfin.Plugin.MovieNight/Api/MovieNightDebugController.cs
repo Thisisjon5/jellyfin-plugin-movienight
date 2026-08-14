@@ -108,4 +108,20 @@ public class MovieNightDebugController : ControllerBase
 
         return Ok();
     }
+
+    /// <summary>
+    /// SPIKE (single-process/multi-input switcher, see planning/DECISIONS.md 2026-08-14): tune
+    /// the "Movie Night (switcher spike)" channel first, then POST here to switch which of its 3
+    /// static inputs is live via ffmpeg's zmq control filter - watch whether the switch is
+    /// seamless through Jellyfin's own remux hop.
+    /// </summary>
+    /// <param name="input">Which of the 3 static inputs to switch to (0, 1, or 2).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>200 with zmqsend's own output on success, 409 with a diagnostic message otherwise.</returns>
+    [HttpPost("switcher-select")]
+    public async Task<ActionResult> SwitcherSelect([FromQuery] int input, CancellationToken cancellationToken)
+    {
+        var (success, output) = await _broadcastManager.SendSwitcherSpikeCommandAsync(input, cancellationToken).ConfigureAwait(false);
+        return success ? Ok(output) : Conflict(output);
+    }
 }

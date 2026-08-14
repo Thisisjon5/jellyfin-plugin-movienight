@@ -37,6 +37,7 @@ public sealed class BroadcastManager : IDisposable
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
     private const int ResumeWarmupBufferSeconds = 30;
+    private const int SwitcherSpikeZmqPort = 5556;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -1026,6 +1027,137 @@ public sealed class BroadcastManager : IDisposable
         "-f", "mpegts",
         "pipe:1",
     };
+
+    /// <summary>
+    /// SPIKE (single-process/multi-input switcher, 2026-08-14, per Jon: "I feel like single
+    /// process with inputs makes sense to try as does raw mpeg tuner"): one continuous ffmpeg
+    /// process holds three synthetic color/tone inputs open simultaneously (standing in for the
+    /// real welcome/pause/goodbye assets, which don't exist yet), switched via a
+    /// <c>streamselect</c> filter whose active input is controlled live over a <c>zmq</c> control
+    /// socket - see <see cref="SendSwitcherSpikeCommandAsync"/>. Explicitly does not attempt movie
+    /// seek/switching (ffmpeg has no live-reseek primitive for an open input, per the ruling) -
+    /// this spike only tests whether lossless switching among the three static sources works and
+    /// survives Jellyfin's own remux hop. Same standalone/independent-of-real-state model as
+    /// <see cref="StartRawTsSpikeProcess"/>.
+    /// </summary>
+    /// <returns>The started process (stdout piped, not yet read from), or <c>null</c> on failure to start.</returns>
+    public Process? StartSwitcherSpikeProcess()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in BuildSwitcherSpikeArgs())
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            return Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: switcher spike - failed to start test encoder");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Stops a process started by <see cref="StartSwitcherSpikeProcess"/>.
+    /// </summary>
+    /// <param name="process">The process to stop and dispose.</param>
+    public void StopSwitcherSpikeProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited between the check and Kill(); nothing to do.
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static List<string> BuildSwitcherSpikeArgs() => new List<string>
+    {
+        "-re", "-f", "lavfi", "-i", "color=c=blue:s=1280x720:r=30",
+        "-re", "-f", "lavfi", "-i", "color=c=maroon:s=1280x720:r=30",
+        "-re", "-f", "lavfi", "-i", "color=c=darkgreen:s=1280x720:r=30",
+        "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+        "-filter_complex",
+        FormattableString.Invariant($"[0:v][1:v][2:v]streamselect=inputs=3:map=0,zmq=bind_address=tcp\\://127.0.0.1\\:{SwitcherSpikeZmqPort}[vout]"),
+        "-map", "[vout]", "-map", "3:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+        "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+        "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+        "-f", "mpegts",
+        "pipe:1",
+    };
+
+    /// <summary>
+    /// Sends a live <c>streamselect map N</c> command to whichever switcher spike process is
+    /// currently running, via ffmpeg's own bundled <c>zmqsend</c> helper (only shipped by ffmpeg
+    /// builds compiled with libzmq support - not guaranteed present, which is itself part of what
+    /// this spike is testing). No process-object plumbing needed: the zmq control port is fixed
+    /// (<see cref="SwitcherSpikeZmqPort"/>), so this works against whatever switcher spike process
+    /// the client's HTTP connection is currently keeping alive, independent of this call.
+    /// </summary>
+    /// <param name="inputIndex">Which of the 3 static inputs to switch to (0, 1, or 2).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><c>true</c> plus zmqsend's own output on success, <c>false</c> plus a diagnostic message otherwise.</returns>
+    public async Task<(bool Success, string Output)> SendSwitcherSpikeCommandAsync(int inputIndex, CancellationToken cancellationToken)
+    {
+        var ffmpegDir = Path.GetDirectoryName(_mediaEncoder.EncoderPath);
+        var zmqSendPath = ffmpegDir is null ? null : Path.Combine(ffmpegDir, OperatingSystem.IsWindows() ? "zmqsend.exe" : "zmqsend");
+        if (zmqSendPath is null || !File.Exists(zmqSendPath))
+        {
+            return (false, $"zmqsend not found at {zmqSendPath ?? "(unknown)"} - this ffmpeg build may not include libzmq support");
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = zmqSendPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("-b");
+        startInfo.ArgumentList.Add(FormattableString.Invariant($"tcp://127.0.0.1:{SwitcherSpikeZmqPort}"));
+        startInfo.ArgumentList.Add(FormattableString.Invariant($"streamselect map {inputIndex}"));
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return (false, "Failed to start zmqsend process");
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token).ConfigureAwait(false);
+            var stderr = await process.StandardError.ReadToEndAsync(cts.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            return (process.ExitCode == 0, string.IsNullOrWhiteSpace(stdout) ? stderr : stdout);
+        }
+        catch (OperationCanceledException)
+        {
+            return (false, "zmqsend timed out after 5s - no switcher spike process listening? (tune the switcher spike channel first)");
+        }
+    }
 
     /// <summary>
     /// Hand-writes <c>HlsDirectory/master.m3u8</c> from <see cref="_servedSegments"/> - once a

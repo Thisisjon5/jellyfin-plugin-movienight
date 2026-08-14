@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -28,6 +29,11 @@ public class MovieNightController : ControllerBase
     // tunable test channel independent of BroadcastManager's own Live state - see GetRawTsSpikeStream.
     private const string RawTsSpikeChannelId = "movienightrawts";
     private const string RawTsSpikeChannelName = "Movie Night (raw TS spike)";
+
+    // SPIKE (single-process/multi-input switcher, see planning/DECISIONS.md 2026-08-14): a third,
+    // always-tunable test channel - see GetSwitcherSpikeStream.
+    private const string SwitcherSpikeChannelId = "movienightswitcher";
+    private const string SwitcherSpikeChannelName = "Movie Night (switcher spike)";
 
     // ffmpeg's -hls_segment_filename uses %03d (minimum 3 digits, not a cap) - a broadcast running
     // past segment 999 (i.e. beyond ~66 minutes at 4s/segment) produces 4+ digit names, so this
@@ -78,6 +84,10 @@ public class MovieNightController : ControllerBase
         var rawTsUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/live.ts";
         m3u += $"#EXTINF:-1 tvg-id=\"{RawTsSpikeChannelId}\" tvg-name=\"{RawTsSpikeChannelName}\",{RawTsSpikeChannelName}\n{rawTsUrl}\n";
 
+        // Always listed too - see StartSwitcherSpikeProcess for why.
+        var switcherUrl = $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/switcher.ts";
+        m3u += $"#EXTINF:-1 tvg-id=\"{SwitcherSpikeChannelId}\" tvg-name=\"{SwitcherSpikeChannelName}\",{SwitcherSpikeChannelName}\n{switcherUrl}\n";
+
         return Content(m3u, "application/vnd.apple.mpegurl");
     }
 
@@ -92,7 +102,28 @@ public class MovieNightController : ControllerBase
     /// <param name="cancellationToken">Bound to the HTTP request - lets the encoder be killed the moment the client disconnects.</param>
     /// <returns>A task that completes once the client disconnects or the encoder exits.</returns>
     [HttpGet("stream/live.ts")]
-    public async Task GetRawTsSpikeStream(CancellationToken cancellationToken)
+    public Task GetRawTsSpikeStream(CancellationToken cancellationToken) =>
+        PipeRawTsProcessAsync(_broadcastManager.StartRawTsSpikeProcess, _broadcastManager.StopRawTsSpikeProcess, cancellationToken);
+
+    /// <summary>
+    /// SPIKE (single-process/multi-input switcher, see planning/DECISIONS.md 2026-08-14): pipes
+    /// the single-process/multi-input switcher's raw MPEG-TS stdout straight to the client - see
+    /// <see cref="BroadcastManager.StartSwitcherSpikeProcess"/>. Use
+    /// <c>POST /MovieNight/api/debug/switcher-select</c> while tuned in to switch which of the 3
+    /// inputs is live, and watch whether the switch is seamless through Jellyfin's own remux hop.
+    /// </summary>
+    /// <param name="cancellationToken">Bound to the HTTP request - lets the encoder be killed the moment the client disconnects.</param>
+    /// <returns>A task that completes once the client disconnects or the encoder exits.</returns>
+    [HttpGet("stream/switcher.ts")]
+    public Task GetSwitcherSpikeStream(CancellationToken cancellationToken) =>
+        PipeRawTsProcessAsync(_broadcastManager.StartSwitcherSpikeProcess, _broadcastManager.StopSwitcherSpikeProcess, cancellationToken);
+
+    /// <summary>
+    /// Shared plumbing for both raw-MPEG-TS spike endpoints: starts a process via
+    /// <paramref name="startProcess"/>, streams its stdout to the response body until the client
+    /// disconnects or the process exits, then stops it via <paramref name="stopProcess"/>.
+    /// </summary>
+    private async Task PipeRawTsProcessAsync(Func<Process?> startProcess, Action<Process> stopProcess, CancellationToken cancellationToken)
     {
         if (!IsLoopbackRequest())
         {
@@ -100,7 +131,7 @@ public class MovieNightController : ControllerBase
             return;
         }
 
-        var process = _broadcastManager.StartRawTsSpikeProcess();
+        var process = startProcess();
         if (process is null)
         {
             HttpContext.Response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
@@ -118,7 +149,7 @@ public class MovieNightController : ControllerBase
         }
         finally
         {
-            _broadcastManager.StopRawTsSpikeProcess(process);
+            stopProcess(process);
         }
     }
 
@@ -180,10 +211,13 @@ public class MovieNightController : ControllerBase
         var stop = start + duration;
         const string Format = "yyyyMMddHHmmss +0000";
 
-        // SPIKE (raw MPEG-TS tuner feed): the test channel is always tunable (see GetPlaylist), so
-        // its guide block is a fixed rolling window rather than tied to broadcast state.
+        // SPIKE (raw MPEG-TS tuner feed / single-process switcher): both test channels are always
+        // tunable (see GetPlaylist), so their guide blocks are a fixed rolling window rather than
+        // tied to broadcast state.
         var rawTsStart = DateTime.UtcNow;
         var rawTsStop = rawTsStart + TimeSpan.FromHours(4);
+        var switcherStart = DateTime.UtcNow;
+        var switcherStop = switcherStart + TimeSpan.FromHours(4);
 
         var xml = $"""
             <?xml version="1.0" encoding="UTF-8"?>
@@ -199,6 +233,12 @@ public class MovieNightController : ControllerBase
               </channel>
               <programme start="{rawTsStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{rawTsStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{RawTsSpikeChannelId}">
                 <title>{RawTsSpikeChannelName}</title>
+              </programme>
+              <channel id="{SwitcherSpikeChannelId}">
+                <display-name>{SwitcherSpikeChannelName}</display-name>
+              </channel>
+              <programme start="{switcherStart.ToString(Format, CultureInfo.InvariantCulture)}" stop="{switcherStop.ToString(Format, CultureInfo.InvariantCulture)}" channel="{SwitcherSpikeChannelId}">
+                <title>{SwitcherSpikeChannelName}</title>
               </programme>
             </tv>
             """;
