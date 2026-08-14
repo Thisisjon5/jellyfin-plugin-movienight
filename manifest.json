@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.16.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.16.0/jellyfin-plugin-movienight_0.3.16.0.zip",
+        "checksum": "f168a5fb697cc9f114a4766f36b56553",
+        "timestamp": "2026-08-14T22:40:00Z",
+        "changelog": "Raw MPEG-TS tuner spike: adds a second, always-tunable test channel (\"Movie Night (raw TS spike)\") that pipes a synthetic testsrc/tone ffmpeg process's raw MPEG-TS stdout straight to the client, independent of the real broadcast's state machine. Tests whether Jellyfin's M3U tuner accepts and remuxes a raw continuous-stream URL the same way it does hand-rolled HLS."
+      },
+      {
         "version": "0.3.15.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.15.0/jellyfin-plugin-movienight_0.3.15.0.zip",
