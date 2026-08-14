@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.9.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.9.0/jellyfin-plugin-movienight_0.3.9.0.zip",
+        "checksum": "03e48c466766df8ced396e1ed393597a",
+        "timestamp": "2026-08-14T18:50:23Z",
+        "changelog": "Fixes resume-crash bug in 0.3.8.0: Resume() now restarts the periodic splice-copy timer, same as Pause() does, so the served playlist keeps updating after resume instead of stalling out."
+      },
+      {
         "version": "0.3.8.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.8.0/jellyfin-plugin-movienight_0.3.8.0.zip",
