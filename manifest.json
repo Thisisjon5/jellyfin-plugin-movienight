@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.3.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.3.0/jellyfin-plugin-movienight_0.3.3.0.zip",
+        "checksum": "23b4999a15e98c55b794304d9aea55ce",
+        "timestamp": "2026-08-14T15:04:43Z",
+        "changelog": "The live Go Live test also surfaced a design gap, not a bug: guide-based clients (Roku) showed \"no schedule information\" during the broadcast. Root cause - Jellyfin's built-in \"Refresh Guide\" scheduled task only runs once every 24h by default, so without an explicit trigger a real movie-length broadcast would still finish before the guide ever caught up. BroadcastManager now calls IGuideManager.RefreshGuide (fire-and-forget) on every state change - Go Live, natural end, crash, and explicit Stop - so guide-based clients see current info promptly in both directions."
+      },
+      {
         "version": "0.3.2.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.2.0/jellyfin-plugin-movienight_0.3.2.0.zip",
