@@ -486,7 +486,6 @@ public sealed class BroadcastManager : IDisposable
         HardwareAccel accel;
         string? vaapiDevice;
         double pausedAt;
-        int nextIndex;
         lock (_lock)
         {
             if (_state != BroadcastState.Live || !_isPaused || _currentItemPath is null)
@@ -498,16 +497,16 @@ public sealed class BroadcastManager : IDisposable
             accel = _currentAccel;
             vaapiDevice = _currentVaapiDevice;
             pausedAt = _pausedAtSeconds;
-            nextIndex = _nextSegmentIndex;
         }
 
-        lock (_lock)
-        {
-            StopSpliceTimerUnlocked();
-        }
-
-        await KillActiveEncoderForSpliceAsync().ConfigureAwait(false);
-
+        // Deliberately does NOT stop the splice timer or touch the active source yet - it keeps
+        // copying fresh filler segments into the served directory the ENTIRE time this new movie
+        // encoder is cold-starting below (which can take many seconds). Cutting the served feed
+        // before the replacement is ready was the actual bug (found 2026-08-14 live testing): it
+        // left the served playlist stalled for the whole warm-up window, which is exactly what
+        // Jellyfin's own downstream remux treats as the stream ending. This is the same principle
+        // as the pre-warmed filler fix (0.3.8.0), applied to the resume side too - per Jon: we're
+        // building a video switcher, and a switcher never cuts to a source before it's rolling.
         var resumePosition = Math.Max(0, pausedAt - RewindSeconds);
         CleanDirectory(ResumedMovieDirectory);
         var args = FfmpegCommandBuilder.Build(itemPath, ResumedMovieDirectory, accel, vaapiDevice, resumePosition);
@@ -523,6 +522,10 @@ public sealed class BroadcastManager : IDisposable
             return false;
         }
 
+        // The already-running splice timer picks up this change on its next tick (within
+        // SpliceTickSeconds) - no separate restart needed, and _nextSegmentIndex is read fresh
+        // by that tick rather than snapshotted here, so it already reflects however many filler
+        // segments got copied in during the warm-up wait above.
         lock (_lock)
         {
             _isPaused = false;
@@ -531,10 +534,8 @@ public sealed class BroadcastManager : IDisposable
             _activeSourceCursor = 0;
             _pendingDiscontinuityOnNextCopy = true;
             _startedAtUtc = DateTime.UtcNow.AddSeconds(-resumePosition);
-            _nextSegmentIndex = nextIndex; // preserved across the pause/resume for this splice pass
         }
 
-        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.Zero, TimeSpan.FromSeconds(SpliceTickSeconds));
         StartWatchdog();
         _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
         return true;

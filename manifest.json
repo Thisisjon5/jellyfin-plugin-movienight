@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.12.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.12.0/jellyfin-plugin-movienight_0.3.12.0.zip",
+        "checksum": "62b81a4b8cdd563c38266419b7651fa2",
+        "timestamp": "2026-08-14T20:27:58Z",
+        "changelog": "Fixes the actual cause of resume never playing: Resume() stopped the filler feed before the new movie encoder was ready, stalling the served playlist during the whole warm-up window. We're building a video switcher, and a switcher never cuts to a source before it's rolling - the filler now stays live the entire time the movie encoder warms up in the background."
+      },
+      {
         "version": "0.3.11.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.11.0/jellyfin-plugin-movienight_0.3.11.0.zip",
