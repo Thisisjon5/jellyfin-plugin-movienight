@@ -37,26 +37,29 @@ public class MovieNightDebugController : ControllerBase
     }
 
     /// <summary>
-    /// Spike 4: suspends the running encoder (SIGSTOP) without touching state/HLS directory/guide,
-    /// to test whether an already-tuned client survives the freeze cleanly - no client command
-    /// push, just the shared live stream pausing what it's carrying.
+    /// Spike 5: pauses by splicing a background filler encoder into the served playlist with
+    /// EXT-X-DISCONTINUITY (see planning/DECISIONS.md "mechanism replaced: filler-channel
+    /// splice") - replaces spike 4's SIGSTOP approach, which worked mechanically but desynced
+    /// across clients due to Jellyfin's own remux hop.
     /// </summary>
-    /// <returns>200 if the encoder was suspended, 409 if the broadcast isn't Live.</returns>
+    /// <returns>200 if the splice to filler succeeded, 409 if the broadcast isn't Live or is already paused.</returns>
     [HttpPost("freeze")]
-    public ActionResult Freeze()
+    public async Task<ActionResult> Freeze()
     {
-        return _broadcastManager.Freeze() ? Ok() : Conflict();
+        var ok = await _broadcastManager.Pause().ConfigureAwait(false);
+        return ok ? Ok() : Conflict();
     }
 
     /// <summary>
-    /// Spike 4 counterpart: resumes the suspended encoder (SIGCONT) - it continues exactly where
-    /// it left off, no restart, no lost position.
+    /// Spike 5 counterpart: kills the filler, respawns the movie a little before the pause point,
+    /// and splices back once it's confirmed flowing.
     /// </summary>
-    /// <returns>200 if the encoder was resumed, 409 if the broadcast isn't Live.</returns>
+    /// <returns>200 if the splice back to the movie succeeded, 409 if the broadcast isn't paused.</returns>
     [HttpPost("unfreeze")]
-    public ActionResult Unfreeze()
+    public async Task<ActionResult> Unfreeze()
     {
-        return _broadcastManager.Unfreeze() ? Ok() : Conflict();
+        var ok = await _broadcastManager.Resume().ConfigureAwait(false);
+        return ok ? Ok() : Conflict();
     }
 
     /// <summary>

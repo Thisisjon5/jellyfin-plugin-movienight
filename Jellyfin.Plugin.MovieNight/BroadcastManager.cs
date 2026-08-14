@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
@@ -30,8 +32,10 @@ public sealed class BroadcastManager : IDisposable
     private const int SegmentStallSeconds = 30;
     private const long DiskGuardBytes = 2L * 1024 * 1024 * 1024;
     private const int Sigterm = 15;
-    private const int Sigstop = 19;
-    private const int Sigcont = 18;
+    private const int RewindSeconds = 15;
+    private const int SplicedSegmentSeconds = 4;
+    private const int ServedWindowSize = 10;
+    private const int SpliceTickSeconds = 2;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -39,6 +43,11 @@ public sealed class BroadcastManager : IDisposable
     private readonly IServerConfigurationManager _configurationManager;
     private readonly IGuideManager _guideManager;
     private readonly ILogger<BroadcastManager> _logger;
+
+    // SPIKE 5 (2026-08-14, see planning/DECISIONS.md "mechanism replaced: filler-channel splice"):
+    // rolling window of segments currently in the served HlsDirectory/master.m3u8 playlist, once
+    // this class has taken over writing it (see the fields below and Pause()/Resume()).
+    private readonly List<(string FileName, double Duration, bool DiscontinuityBefore)> _servedSegments = new();
 
     private Process? _process;
     private Timer? _watchdogTimer;
@@ -49,6 +58,19 @@ public sealed class BroadcastManager : IDisposable
     private DateTime? _startedAtUtc;
     private long? _runTimeTicks;
     private string? _lastFailureReason;
+    private string? _currentItemPath;
+    private HardwareAccel _currentAccel;
+    private string? _currentVaapiDevice;
+    private bool _suppressExitHandling;
+
+    private bool _isPaused;
+    private double _pausedAtSeconds;
+    private Timer? _spliceTimer;
+    private string? _activeSourceDirectory;
+    private string _activeSourcePrefix = string.Empty;
+    private int _activeSourceCursor;
+    private int _nextSegmentIndex;
+    private bool _pendingDiscontinuityOnNextCopy;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BroadcastManager"/> class.
@@ -77,12 +99,27 @@ public sealed class BroadcastManager : IDisposable
         _guideManager = guideManager;
         _logger = logger;
         HlsDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "hls");
+        FillerDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "filler");
+        ResumedMovieDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "resume");
     }
 
     /// <summary>
     /// Gets the directory the current (or most recent) broadcast's HLS output lives in.
     /// </summary>
     public string HlsDirectory { get; }
+
+    /// <summary>
+    /// Gets the private directory the background filler (pause-card) encoder writes into (SPIKE
+    /// 5) - never served directly, copied into <see cref="HlsDirectory"/> by the splice timer.
+    /// </summary>
+    private string FillerDirectory { get; }
+
+    /// <summary>
+    /// Gets the private directory a resumed movie encoder writes into after a pause (SPIKE 5) -
+    /// same copy-and-splice treatment as <see cref="FillerDirectory"/>, so ffmpeg never writes
+    /// directly into <see cref="HlsDirectory"/> again once a broadcast has paused at least once.
+    /// </summary>
+    private string ResumedMovieDirectory { get; }
 
     /// <summary>
     /// Gets a value indicating whether a broadcast is currently live.
@@ -154,6 +191,9 @@ public sealed class BroadcastManager : IDisposable
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var accel = MapHardwareAccel(encodingOptions.HardwareAccelerationType);
         var args = FfmpegCommandBuilder.Build(item.Path, HlsDirectory, accel, encodingOptions.VaapiDevice);
+        _currentItemPath = item.Path;
+        _currentAccel = accel;
+        _currentVaapiDevice = encodingOptions.VaapiDevice;
 
         var startInfo = new ProcessStartInfo
         {
@@ -284,68 +324,482 @@ public sealed class BroadcastManager : IDisposable
             _runTimeTicks = null;
             _process = null;
             _stderrTail = null;
+            _currentItemPath = null;
+            StopSpliceTimerUnlocked();
+            _isPaused = false;
+            _pausedAtSeconds = 0;
+            _activeSourceDirectory = null;
+            _activeSourcePrefix = string.Empty;
+            _activeSourceCursor = 0;
+            _servedSegments.Clear();
+            _nextSegmentIndex = 0;
+            _pendingDiscontinuityOnNextCopy = false;
         }
 
         TriggerGuideRefresh();
     }
 
     /// <summary>
-    /// SPIKE 4 (2026-08-14, see planning/DECISIONS.md universal-pause entry): suspends the SAME
-    /// running ffmpeg process via SIGSTOP, rather than killing it and spawning a replacement -
-    /// spike 3 (kill + spawn a synthetic frozen source) produced a broadcast that stopped writing
-    /// segments and tripped the stall watchdog, root cause not diagnosed. SIGSTOP freezes the
-    /// process exactly where it is (no new segments, no CPU/IO) with nothing to reconstruct on
-    /// resume. Suspends the stall watchdog too, since a deliberately-frozen encoder isn't a stall.
+    /// SPIKE 5: pauses the broadcast by killing the currently-active encoder (the movie, or
+    /// whatever it was last spliced to) and splicing in a continuously-running filler encoder,
+    /// with an <c>EXT-X-DISCONTINUITY</c> marker at the switch. The pause position is tracked as
+    /// wall-clock elapsed time, not parsed from ffmpeg, per the DECISIONS.md ruling.
     /// </summary>
-    /// <returns><c>true</c> if the encoder was suspended.</returns>
-    public bool Freeze()
+    /// <returns><c>true</c> if the splice to filler succeeded.</returns>
+    public async Task<bool> Pause()
     {
+        string? itemPath;
+        DateTime? startedAt;
         lock (_lock)
         {
-            if (_state != BroadcastState.Live || _process is null || _process.HasExited)
+            if (_state != BroadcastState.Live || _isPaused)
             {
                 return false;
             }
 
-            var result = NativeKill(_process.Id, Sigstop);
-            if (result != 0)
+            itemPath = _currentItemPath;
+            startedAt = _startedAtUtc;
+        }
+
+        if (itemPath is null)
+        {
+            return false;
+        }
+
+        var elapsedSeconds = startedAt is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0;
+
+        await KillActiveEncoderForSpliceAsync().ConfigureAwait(false);
+
+        CleanDirectory(FillerDirectory);
+        if (!SpawnSpliceSource(BuildFillerArgs(FillerDirectory)))
+        {
+            _logger.LogError("Movie Night: spike 5 - failed to start filler encoder");
+            return false;
+        }
+
+        if (!await WaitForFirstSegmentAsync(FillerDirectory, "filler_").ConfigureAwait(false))
+        {
+            _logger.LogError("Movie Night: spike 5 - filler encoder did not produce a segment in time");
+            return false;
+        }
+
+        lock (_lock)
+        {
+            if (_servedSegments.Count == 0)
             {
-                _logger.LogError("Movie Night: spike freeze - SIGSTOP failed (libc kill returned {Result})", result);
-                return false;
+                SeedServedSegmentsFromExistingHlsDirectoryUnlocked();
             }
 
+            _pausedAtSeconds = elapsedSeconds;
+            _isPaused = true;
+            _activeSourceDirectory = FillerDirectory;
+            _activeSourcePrefix = "filler_";
+            _activeSourceCursor = 0;
+            _pendingDiscontinuityOnNextCopy = true;
             StopWatchdogUnlocked();
-            _logger.LogInformation("Movie Night: spike freeze - encoder suspended (SIGSTOP)");
-            return true;
+        }
+
+        SpliceTick();
+        _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
+        _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to filler", elapsedSeconds);
+        return true;
+    }
+
+    /// <summary>
+    /// SPIKE 5 counterpart to <see cref="Pause"/>: kills the filler, respawns the movie encoder a
+    /// little before the pause position (<see cref="RewindSeconds"/>), waits for it to actually be
+    /// producing output, then splices back with another discontinuity marker.
+    /// </summary>
+    /// <returns><c>true</c> if the splice back to the movie succeeded.</returns>
+    public async Task<bool> Resume()
+    {
+        string itemPath;
+        HardwareAccel accel;
+        string? vaapiDevice;
+        double pausedAt;
+        int nextIndex;
+        lock (_lock)
+        {
+            if (_state != BroadcastState.Live || !_isPaused || _currentItemPath is null)
+            {
+                return false;
+            }
+
+            itemPath = _currentItemPath;
+            accel = _currentAccel;
+            vaapiDevice = _currentVaapiDevice;
+            pausedAt = _pausedAtSeconds;
+            nextIndex = _nextSegmentIndex;
+        }
+
+        lock (_lock)
+        {
+            StopSpliceTimerUnlocked();
+        }
+
+        await KillActiveEncoderForSpliceAsync().ConfigureAwait(false);
+
+        var resumePosition = Math.Max(0, pausedAt - RewindSeconds);
+        CleanDirectory(ResumedMovieDirectory);
+        var args = FfmpegCommandBuilder.Build(itemPath, ResumedMovieDirectory, accel, vaapiDevice, resumePosition);
+        if (!SpawnSpliceSource(args))
+        {
+            _logger.LogError("Movie Night: spike 5 - failed to restart the movie encoder for resume");
+            return false;
+        }
+
+        if (!await WaitForFirstSegmentAsync(ResumedMovieDirectory, "segment_").ConfigureAwait(false))
+        {
+            _logger.LogError("Movie Night: spike 5 - resumed movie encoder did not produce a segment in time");
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _isPaused = false;
+            _activeSourceDirectory = ResumedMovieDirectory;
+            _activeSourcePrefix = "segment_";
+            _activeSourceCursor = 0;
+            _pendingDiscontinuityOnNextCopy = true;
+            _startedAtUtc = DateTime.UtcNow.AddSeconds(-resumePosition);
+            _nextSegmentIndex = nextIndex; // preserved across the pause/resume for this splice pass
+        }
+
+        SpliceTick();
+        StartWatchdog();
+        _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
+        return true;
+    }
+
+    private static List<string> BuildFillerArgs(string outputDir) => new List<string>
+    {
+        "-re", "-f", "lavfi", "-i", "color=c=maroon:s=1280x720:r=30",
+        "-re", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+        "-b:v", "1000k", "-maxrate", "1000k", "-bufsize", "2000k",
+        "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+        "-force_key_frames", $"expr:gte(t,n_forced*{SplicedSegmentSeconds})",
+        "-f", "hls",
+        "-hls_time", SplicedSegmentSeconds.ToString(CultureInfo.InvariantCulture),
+        "-hls_list_size", "10",
+        "-hls_flags", "delete_segments+independent_segments",
+        "-hls_segment_filename", Path.Combine(outputDir, "filler_%03d.ts"),
+        Path.Combine(outputDir, "filler.m3u8"),
+    };
+
+    /// <summary>
+    /// Kills whichever encoder is currently active, for a deliberate splice transition rather than
+    /// a real stop - marks the exit as intentional first so <see cref="OnProcessExited"/> doesn't
+    /// treat it as a crash or natural end.
+    /// </summary>
+    private async Task KillActiveEncoderForSpliceAsync()
+    {
+        Process? process;
+        lock (_lock)
+        {
+            _suppressExitHandling = true;
+            process = _process;
+        }
+
+        if (process is null || process.HasExited)
+        {
+            return;
+        }
+
+        if (!TrySendSigterm(process))
+        {
+            lock (_lock)
+            {
+                KillProcessUnlocked();
+            }
+        }
+        else
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
+            try
+            {
+                await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                lock (_lock)
+                {
+                    KillProcessUnlocked();
+                }
+            }
         }
     }
 
     /// <summary>
-    /// SPIKE 4 counterpart to <see cref="Freeze"/>: resumes the same suspended process via SIGCONT
-    /// - it continues encoding exactly where it left off, no restart, no lost position.
+    /// Spawns an encoder for a splice source (filler or a resumed movie) and makes it the tracked
+    /// "active" process for crash detection - <see cref="_process"/> always refers to whichever
+    /// encoder is currently relevant, whatever it's feeding.
     /// </summary>
-    /// <returns><c>true</c> if the encoder was resumed.</returns>
-    public bool Unfreeze()
+    private bool SpawnSpliceSource(IReadOnlyList<string> args)
     {
-        lock (_lock)
+        var startInfo = new ProcessStartInfo
         {
-            if (_state != BroadcastState.Live || _process is null || _process.HasExited)
-            {
-                return false;
-            }
-
-            var result = NativeKill(_process.Id, Sigcont);
-            if (result != 0)
-            {
-                _logger.LogError("Movie Night: spike freeze - SIGCONT failed (libc kill returned {Result})", result);
-                return false;
-            }
-
-            _logger.LogInformation("Movie Night: spike freeze - encoder resumed (SIGCONT)");
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
         }
 
-        StartWatchdog();
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        var stderrTail = new StderrTailBuffer();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                stderrTail.Add(e.Data);
+            }
+        };
+        process.Exited += (_, _) => OnProcessExited(process, stderrTail);
+
+        try
+        {
+            process.Start();
+            process.BeginErrorReadLine();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: spike 5 splice - failed to start ffmpeg");
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _process = process;
+            _stderrTail = stderrTail;
+            _suppressExitHandling = false;
+        }
+
         return true;
+    }
+
+    private static async Task<bool> WaitForFirstSegmentAsync(string directory, string prefix)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(StartupTimeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (Directory.Exists(directory) && Directory.EnumerateFiles(directory, prefix + "*.ts").Any())
+            {
+                return true;
+            }
+
+            await Task.Delay(300).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Called under <see cref="_lock"/> the first time a broadcast ever pauses: seeds
+    /// <see cref="_servedSegments"/> from whatever <c>segment_*.ts</c> files the (just-killed)
+    /// movie encoder already left in <see cref="HlsDirectory"/>, so the served playlist continues
+    /// from where the client already is rather than jumping backwards.
+    /// </summary>
+    private void SeedServedSegmentsFromExistingHlsDirectoryUnlocked()
+    {
+        if (!Directory.Exists(HlsDirectory))
+        {
+            return;
+        }
+
+        var files = Directory.EnumerateFiles(HlsDirectory, "segment_*.ts")
+            .Select(Path.GetFileName)
+            .Where(f => f is not null)
+            .Select(f => f!)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var file in files)
+        {
+            _servedSegments.Add((file, SplicedSegmentSeconds, false));
+        }
+
+        if (_servedSegments.Count > ServedWindowSize)
+        {
+            _servedSegments.RemoveRange(0, _servedSegments.Count - ServedWindowSize);
+        }
+
+        var maxIndex = files
+            .Select(ParseSegmentIndex)
+            .Where(i => i.HasValue)
+            .Select(i => i!.Value)
+            .DefaultIfEmpty(-1)
+            .Max();
+        _nextSegmentIndex = maxIndex + 1;
+    }
+
+    private static int? ParseSegmentIndex(string fileName)
+    {
+        var match = Regex.Match(fileName, @"segment_(\d+)\.ts$");
+        return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
+    }
+
+    /// <summary>
+    /// Copies any new segments the currently-active splice source has produced into
+    /// <see cref="HlsDirectory"/> under continuing <see cref="_nextSegmentIndex"/> numbers, marks
+    /// the first copied segment with a discontinuity if one is pending, and rewrites the served
+    /// playlist. Runs on a timer while spliced (<see cref="_spliceTimer"/>) and once immediately
+    /// after every splice transition.
+    /// </summary>
+    private void SpliceTick()
+    {
+        string? sourceDir;
+        string sourcePrefix;
+        int cursor;
+        lock (_lock)
+        {
+            if (_activeSourceDirectory is null)
+            {
+                return;
+            }
+
+            sourceDir = _activeSourceDirectory;
+            sourcePrefix = _activeSourcePrefix;
+            cursor = _activeSourceCursor;
+        }
+
+        var copiedAny = false;
+        while (true)
+        {
+            var sourceFile = Path.Combine(sourceDir, $"{sourcePrefix}{cursor:D3}.ts");
+            if (!File.Exists(sourceFile))
+            {
+                break;
+            }
+
+            int destIndex;
+            lock (_lock)
+            {
+                destIndex = _nextSegmentIndex;
+            }
+
+            var destFileName = $"segment_{destIndex:D3}.ts";
+            var destFile = Path.Combine(HlsDirectory, destFileName);
+            try
+            {
+                File.Copy(sourceFile, destFile, overwrite: true);
+            }
+            catch (IOException ex)
+            {
+                _logger.LogWarning(ex, "Movie Night: spike 5 - failed to copy spliced segment {Source}", sourceFile);
+                break;
+            }
+
+            lock (_lock)
+            {
+                var markDiscontinuity = _pendingDiscontinuityOnNextCopy;
+                _pendingDiscontinuityOnNextCopy = false;
+                _servedSegments.Add((destFileName, SplicedSegmentSeconds, markDiscontinuity));
+                while (_servedSegments.Count > ServedWindowSize)
+                {
+                    var dropped = _servedSegments[0];
+                    _servedSegments.RemoveAt(0);
+                    TryDeleteServedFile(dropped.FileName);
+                }
+
+                _nextSegmentIndex++;
+                _activeSourceCursor = cursor + 1;
+            }
+
+            cursor++;
+            copiedAny = true;
+        }
+
+        if (copiedAny)
+        {
+            WriteServedPlaylist();
+        }
+    }
+
+    private void TryDeleteServedFile(string fileName)
+    {
+        try
+        {
+            var path = Path.Combine(HlsDirectory, fileName);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup; a leftover segment file isn't worth failing the splice over.
+        }
+    }
+
+    /// <summary>
+    /// Hand-writes <c>HlsDirectory/master.m3u8</c> from <see cref="_servedSegments"/> - once a
+    /// broadcast has spliced at least once, ffmpeg never writes this file directly again, because
+    /// its own live-HLS muxer would just overwrite the discontinuity markers this class inserts.
+    /// </summary>
+    private void WriteServedPlaylist()
+    {
+        List<(string FileName, double Duration, bool DiscontinuityBefore)> segments;
+        int nextIndex;
+        lock (_lock)
+        {
+            segments = new List<(string, double, bool)>(_servedSegments);
+            nextIndex = _nextSegmentIndex;
+        }
+
+        if (segments.Count == 0)
+        {
+            return;
+        }
+
+        var mediaSequence = Math.Max(0, nextIndex - segments.Count);
+        var sb = new StringBuilder();
+        sb.Append("#EXTM3U\n");
+        sb.Append("#EXT-X-VERSION:3\n");
+        sb.Append(CultureInfo.InvariantCulture, $"#EXT-X-TARGETDURATION:{SplicedSegmentSeconds}\n");
+        sb.Append(CultureInfo.InvariantCulture, $"#EXT-X-MEDIA-SEQUENCE:{mediaSequence}\n");
+        sb.Append("#EXT-X-INDEPENDENT-SEGMENTS\n");
+        foreach (var segment in segments)
+        {
+            if (segment.DiscontinuityBefore)
+            {
+                sb.Append("#EXT-X-DISCONTINUITY\n");
+            }
+
+            sb.Append(CultureInfo.InvariantCulture, $"#EXTINF:{segment.Duration:F1},\n{segment.FileName}\n");
+        }
+
+        var masterPath = Path.Combine(HlsDirectory, "master.m3u8");
+        var tmpPath = masterPath + ".tmp";
+        try
+        {
+            File.WriteAllText(tmpPath, sb.ToString());
+            File.Move(tmpPath, masterPath, overwrite: true);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Movie Night: spike 5 - failed to write spliced playlist");
+        }
+    }
+
+    private void CleanDirectory(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+
+            Directory.CreateDirectory(dir);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Movie Night: failed to clean directory {Dir}", dir);
+        }
     }
 
     private static HardwareAccel MapHardwareAccel(MediaBrowser.Model.Entities.HardwareAccelerationType type) =>
@@ -436,6 +890,14 @@ public sealed class BroadcastManager : IDisposable
     {
         lock (_lock)
         {
+            if (_suppressExitHandling)
+            {
+                // SPIKE 5: a Pause()/Resume() splice transition killed this process on purpose
+                // (swapping to filler, or swapping the filler back out for a resumed movie encode)
+                // - it is not the broadcast ending.
+                return;
+            }
+
             if (!ReferenceEquals(_process, process))
             {
                 // Already stopped/replaced by StopAsync or a new GoLiveAsync; nothing to do.
@@ -493,6 +955,12 @@ public sealed class BroadcastManager : IDisposable
     {
         _watchdogTimer?.Dispose();
         _watchdogTimer = null;
+    }
+
+    private void StopSpliceTimerUnlocked()
+    {
+        _spliceTimer?.Dispose();
+        _spliceTimer = null;
     }
 
     private void CheckWatchdog()
@@ -647,6 +1115,11 @@ public sealed class BroadcastManager : IDisposable
     public void Dispose()
     {
         StopWatchdog();
+        lock (_lock)
+        {
+            StopSpliceTimerUnlocked();
+        }
+
         _process?.Dispose();
     }
 

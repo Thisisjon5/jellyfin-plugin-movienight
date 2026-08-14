@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.6.0"
+version: "0.3.7.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,16 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.7.0: Spike 5 for universal pause - replaces spike 4's SIGSTOP approach
+  (mechanically clean but desynced across clients due to Jellyfin's own
+  remux hop) with the filler-channel splice mechanism ruled in
+  planning/DECISIONS.md: a background filler encoder gets spliced into the
+  served playlist with EXT-X-DISCONTINUITY on pause, and the movie encoder
+  is respawned a little before the pause point and spliced back in on
+  resume. Once a broadcast has paused at least once, BroadcastManager (not
+  ffmpeg) owns writing the served master.m3u8, copying segments in from
+  private per-source directories. Debug endpoints unchanged
+  (/MovieNight/api/debug/freeze, /unfreeze - now driving Pause()/Resume()).
   0.3.6.0: Spike 4 for universal pause - replaces spike 3's kill-and-respawn
   freeze (which stopped writing segments and tripped the stall watchdog,
   root cause not diagnosed) with SIGSTOP/SIGCONT on the SAME running ffmpeg
