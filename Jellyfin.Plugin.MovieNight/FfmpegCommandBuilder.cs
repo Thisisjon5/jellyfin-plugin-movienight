@@ -45,9 +45,9 @@ public static class FfmpegCommandBuilder
     /// <param name="accel">Hardware acceleration type, from the server's own configured encoding options.</param>
     /// <param name="vaapiDevice">The VA-API render device path (e.g. <c>/dev/dri/renderD128</c>), required when <paramref name="accel"/> is <see cref="HardwareAccel.Vaapi"/>.</param>
     /// <param name="startPositionSeconds">Input seek offset (ffmpeg <c>-ss</c>) - used to resume from where a paused broadcast left off (spike 5, universal pause). 0 for a normal Go Live.</param>
-    /// <param name="startNumber">First HLS segment number (ffmpeg <c>-start_number</c>) - used so a resumed encode doesn't overwrite/collide with segment files already sitting in <paramref name="outputDir"/> from before the pause. 0 for a normal Go Live.</param>
+    /// <param name="segmentPrefix">Segment filename prefix (e.g. <c>segment_</c> or <c>resume_</c>) - distinct prefixes let the controller resolve a requested filename to the right source directory without needing every encoder to share one numbering space (spike 5's "pointer, not a copy" design).</param>
     /// <returns>The argument list, ready to assign to <c>ProcessStartInfo.ArgumentList</c>.</returns>
-    public static IReadOnlyList<string> Build(string inputFile, string outputDir, HardwareAccel accel, string? vaapiDevice = null, double startPositionSeconds = 0, int startNumber = 0)
+    public static IReadOnlyList<string> Build(string inputFile, string outputDir, HardwareAccel accel, string? vaapiDevice = null, double startPositionSeconds = 0, string segmentPrefix = "segment_")
     {
         var args = new List<string>();
         if (startPositionSeconds > 0)
@@ -66,8 +66,7 @@ public static class FfmpegCommandBuilder
             "-hls_time", "4",
             "-hls_list_size", "10",
             "-hls_flags", "delete_segments+independent_segments",
-            "-start_number", startNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "-hls_segment_filename", Path.Combine(outputDir, "segment_%03d.ts"),
+            "-hls_segment_filename", Path.Combine(outputDir, segmentPrefix + "%03d.ts"),
             Path.Combine(outputDir, "master.m3u8"),
         ]);
 

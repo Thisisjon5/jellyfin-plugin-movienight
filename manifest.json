@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.14.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.14.0/jellyfin-plugin-movienight_0.3.14.0.zip",
+        "checksum": "0b06a0a3d7472cfaa83576bb7a2919d1",
+        "timestamp": "2026-08-14T20:54:41Z",
+        "changelog": "Spike 6: reworks the splice mechanism into a true pointer model - each encoder writes under its own distinct filename prefix, in its own directory, and the controller resolves a requested segment to the right directory. No file copying anywhere, movie encoder left running through the whole pause and only torn down synchronously when resume actually needs to replace it."
+      },
+      {
         "version": "0.3.13.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.13.0/jellyfin-plugin-movienight_0.3.13.0.zip",

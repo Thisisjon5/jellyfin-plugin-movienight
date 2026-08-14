@@ -36,7 +36,6 @@ public sealed class BroadcastManager : IDisposable
     private const int SplicedSegmentSeconds = 4;
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
-    private const int PauseTeardownDelaySeconds = 60;
     private const int ResumeWarmupBufferSeconds = 30;
 
     private readonly object _lock = new();
@@ -72,7 +71,6 @@ public sealed class BroadcastManager : IDisposable
     private string? _activeSourceDirectory;
     private string _activeSourcePrefix = string.Empty;
     private int _activeSourceCursor;
-    private int _nextSegmentIndex;
     private bool _pendingDiscontinuityOnNextCopy;
     private bool _spliceTickRunning;
 
@@ -113,15 +111,15 @@ public sealed class BroadcastManager : IDisposable
     public string HlsDirectory { get; }
 
     /// <summary>
-    /// Gets the private directory the background filler (pause-card) encoder writes into (SPIKE
-    /// 5) - never served directly, copied into <see cref="HlsDirectory"/> by the splice timer.
+    /// Gets the directory the background filler (pause-card) encoder writes into. Not copied
+    /// anywhere - <c>MovieNightController</c> serves its segments directly via
+    /// <see cref="ResolveServedFilePath"/> once the served playlist points at them.
     /// </summary>
     private string FillerDirectory { get; }
 
     /// <summary>
-    /// Gets the private directory a resumed movie encoder writes into after a pause (SPIKE 5) -
-    /// same copy-and-splice treatment as <see cref="FillerDirectory"/>, so ffmpeg never writes
-    /// directly into <see cref="HlsDirectory"/> again once a broadcast has paused at least once.
+    /// Gets the directory a resumed movie encoder writes into after a pause. Not copied anywhere -
+    /// same direct-serve treatment as <see cref="FillerDirectory"/>.
     /// </summary>
     private string ResumedMovieDirectory { get; }
 
@@ -342,7 +340,6 @@ public sealed class BroadcastManager : IDisposable
             _activeSourcePrefix = string.Empty;
             _activeSourceCursor = 0;
             _servedSegments.Clear();
-            _nextSegmentIndex = 0;
             _pendingDiscontinuityOnNextCopy = false;
         }
 
@@ -384,10 +381,17 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
-    /// SPIKE 5: pauses the broadcast by killing the currently-active encoder (the movie, or
-    /// whatever it was last spliced to) and splicing in a continuously-running filler encoder,
-    /// with an <c>EXT-X-DISCONTINUITY</c> marker at the switch. The pause position is tracked as
-    /// wall-clock elapsed time, not parsed from ffmpeg, per the DECISIONS.md ruling.
+    /// SPIKE 6 (2026-08-14, per Jon: "what we've built is largely a pointer for an HLS stream -
+    /// we need to seamlessly transition pointing from one stream to another"): pauses by pointing
+    /// the served playlist at the always-running filler encoder, with an
+    /// <c>EXT-X-DISCONTINUITY</c> marker at the switch. The movie encoder is deliberately left
+    /// running, untouched - killing it is deferred to <see cref="Resume"/>. No file copying
+    /// happens anywhere in this design: each encoder writes its own segments under its own
+    /// filename prefix, in its own directory, and the served master.m3u8 just references
+    /// whichever prefix is currently "selected" - <c>MovieNightController</c> resolves a
+    /// requested filename to the right directory via <see cref="ResolveServedFilePath"/>. The
+    /// pause position is tracked as wall-clock elapsed time, not parsed from ffmpeg, per the
+    /// DECISIONS.md ruling.
     /// </summary>
     /// <returns><c>true</c> if the splice to filler succeeded.</returns>
     public Task<bool> Pause()
@@ -415,24 +419,20 @@ public sealed class BroadcastManager : IDisposable
         // gap of spawning-and-waiting-for-a-filler-on-demand is what broke the first live test
         // tonight: Jellyfin's own downstream remux treats any gap in the served playlist as the
         // stream ending and quits, kicking clients back to the channel list.
-        var fillerCursor = GetLatestFillerSegmentIndex();
+        var fillerCursor = GetLatestSegmentIndex(FillerDirectory, "filler_");
         if (fillerCursor < 0)
         {
-            _logger.LogError("Movie Night: spike 5 - background filler has no segments ready yet, can't splice");
+            _logger.LogError("Movie Night: spike 6 - background filler has no segments ready yet, can't splice");
             return Task.FromResult(false);
         }
 
         var elapsedSeconds = startedAt is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0;
-        Process? staleMovieProcess;
-        lock (_lock)
-        {
-            staleMovieProcess = _process;
-        }
 
-        // Switch the served output to the already-warm filler immediately - fast, no waiting.
-        // The movie encoder is deliberately NOT killed here (see below): per Jon, this is a
-        // video switcher, and a switcher doesn't tear down the old source the instant it cuts
-        // away - it keeps it live until it's confident every viewer has actually moved over.
+        // Point the served output at the already-warm filler immediately - fast, no waiting, and
+        // (per Jon) the movie encoder is simply left running rather than killed here. It's not
+        // colliding with anything: it keeps writing segment_NNN.ts into HlsDirectory exactly as
+        // it always has, while the served playlist below is now referencing filler_NNN.ts from a
+        // different directory entirely. It gets torn down at the start of Resume() instead.
         lock (_lock)
         {
             if (_servedSegments.Count == 0)
@@ -450,53 +450,49 @@ public sealed class BroadcastManager : IDisposable
             StopSpliceTimerUnlocked();
         }
 
-        // Restored to 0.3.9.0's proven pattern (2026-08-14 A/B test: 0.3.9.0 paused clean,
-        // 0.3.10.0 did not, only variable was this trigger). A guaranteed synchronous splice
-        // before the timer starts, with the timer's own first tick a full SpliceTickSeconds
-        // later, gives more headroom before any possible overlap than dueTime: Zero did.
+        // A guaranteed synchronous tick before the timer starts, with the timer's own first tick
+        // a full SpliceTickSeconds later, gives more headroom before any possible overlap than an
+        // immediate-dueTime timer would (found via a real live-tested race, 2026-08-14).
         SpliceTick();
         _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
-        _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to already-warm filler", elapsedSeconds);
-
-        // Grace window: only tear down the old movie encoder once we've given every client a
-        // real chance to have moved over to the filler. A fixed delay is a simple stand-in for
-        // "confirmed every client switched" - a real per-session ack would be more precise but
-        // isn't available here. Fire-and-forget: doesn't block Pause() from returning.
-        if (staleMovieProcess is not null)
-        {
-            _ = Task.Run(() => TeardownStaleProcessAfterGraceAsync(staleMovieProcess, PauseTeardownDelaySeconds, "movie encoder after pause"));
-        }
-
+        _logger.LogInformation("Movie Night: spike 6 - paused at {Seconds:F1}s, pointed at already-warm filler", elapsedSeconds);
         return Task.FromResult(true);
     }
 
-    private int GetLatestFillerSegmentIndex()
+    /// <summary>
+    /// Highest already-produced segment index for a given source, so a fresh splice can start
+    /// from "whatever's newest right now" instead of replaying from a (possibly long-since-
+    /// deleted) historical start.
+    /// </summary>
+    private static int GetLatestSegmentIndex(string directory, string prefix)
     {
-        if (!Directory.Exists(FillerDirectory))
+        if (!Directory.Exists(directory))
         {
             return -1;
         }
 
-        return Directory.EnumerateFiles(FillerDirectory, "filler_*.ts")
+        return Directory.EnumerateFiles(directory, prefix + "*.ts")
             .Select(Path.GetFileName)
             .Where(f => f is not null)
-            .Select(f => ParseFillerSegmentIndex(f!))
+            .Select(f => ParseSegmentIndex(f!, prefix))
             .Where(i => i.HasValue)
             .Select(i => i!.Value)
             .DefaultIfEmpty(-1)
             .Max();
     }
 
-    private static int? ParseFillerSegmentIndex(string fileName)
+    private static int? ParseSegmentIndex(string fileName, string prefix)
     {
-        var match = Regex.Match(fileName, @"filler_(\d+)\.ts$");
+        var match = Regex.Match(fileName, Regex.Escape(prefix) + @"(\d+)\.ts$");
         return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
     }
 
     /// <summary>
-    /// SPIKE 5 counterpart to <see cref="Pause"/>: kills the filler, respawns the movie encoder a
-    /// little before the pause position (<see cref="RewindSeconds"/>), waits for it to actually be
-    /// producing output, then splices back with another discontinuity marker.
+    /// SPIKE 6 counterpart to <see cref="Pause"/>: tears down the movie encoder <see cref="Pause"/>
+    /// deliberately left running, respawns it a little before the pause position
+    /// (<see cref="RewindSeconds"/>) under a distinct filename prefix, waits for it to actually be
+    /// producing output plus a warm-up buffer, then points the served playlist back at it with
+    /// another discontinuity marker.
     /// </summary>
     /// <returns><c>true</c> if the splice back to the movie succeeded.</returns>
     public async Task<bool> Resume()
@@ -505,6 +501,7 @@ public sealed class BroadcastManager : IDisposable
         HardwareAccel accel;
         string? vaapiDevice;
         double pausedAt;
+        Process? staleMovieProcess;
         lock (_lock)
         {
             if (_state != BroadcastState.Live || !_isPaused || _currentItemPath is null)
@@ -516,28 +513,37 @@ public sealed class BroadcastManager : IDisposable
             accel = _currentAccel;
             vaapiDevice = _currentVaapiDevice;
             pausedAt = _pausedAtSeconds;
+            staleMovieProcess = _process;
+        }
+
+        // Tear down the movie encoder Pause() left running, now that we're actually about to
+        // replace it - synchronous and safe (unlike the 60s-delayed version this replaced): it's
+        // still _process at this point, so the exit-suppression window is short and precise
+        // rather than racing against an independent timer.
+        if (staleMovieProcess is not null)
+        {
+            await KillTrackedProcessAsync(staleMovieProcess).ConfigureAwait(false);
         }
 
         // Deliberately does NOT stop the splice timer or touch the active source yet - it keeps
-        // copying fresh filler segments into the served directory the ENTIRE time this new movie
-        // encoder is cold-starting below (which can take many seconds). Cutting the served feed
-        // before the replacement is ready was the actual bug (found 2026-08-14 live testing): it
-        // left the served playlist stalled for the whole warm-up window, which is exactly what
-        // Jellyfin's own downstream remux treats as the stream ending. This is the same principle
-        // as the pre-warmed filler fix (0.3.8.0), applied to the resume side too - per Jon: we're
-        // building a video switcher, and a switcher never cuts to a source before it's rolling.
+        // pointing at the filler for the ENTIRE time this new movie encoder is cold-starting
+        // below (which can take many seconds). Cutting the served feed before the replacement is
+        // ready was the actual bug (found 2026-08-14 live testing): it left the served playlist
+        // stalled for the whole warm-up window, which is exactly what Jellyfin's own downstream
+        // remux treats as the stream ending. Per Jon: we're building a video switcher, and a
+        // switcher never cuts to a source before it's rolling.
         var resumePosition = Math.Max(0, pausedAt - RewindSeconds);
         CleanDirectory(ResumedMovieDirectory);
-        var args = FfmpegCommandBuilder.Build(itemPath, ResumedMovieDirectory, accel, vaapiDevice, resumePosition);
+        var args = FfmpegCommandBuilder.Build(itemPath, ResumedMovieDirectory, accel, vaapiDevice, resumePosition, "resume_");
         if (!SpawnSpliceSource(args))
         {
-            _logger.LogError("Movie Night: spike 5 - failed to restart the movie encoder for resume");
+            _logger.LogError("Movie Night: spike 6 - failed to restart the movie encoder for resume");
             return false;
         }
 
-        if (!await WaitForFirstSegmentAsync(ResumedMovieDirectory, "segment_").ConfigureAwait(false))
+        if (!await WaitForFirstSegmentAsync(ResumedMovieDirectory, "resume_").ConfigureAwait(false))
         {
-            _logger.LogError("Movie Night: spike 5 - resumed movie encoder did not produce a segment in time");
+            _logger.LogError("Movie Night: spike 6 - resumed movie encoder did not produce a segment in time");
             return false;
         }
 
@@ -546,22 +552,22 @@ public sealed class BroadcastManager : IDisposable
         // time, so nothing user-visible is lost by waiting.
         await Task.Delay(TimeSpan.FromSeconds(ResumeWarmupBufferSeconds)).ConfigureAwait(false);
 
+        var resumeCursor = GetLatestSegmentIndex(ResumedMovieDirectory, "resume_");
+
         // The already-running splice timer picks up this change on its next tick (within
-        // SpliceTickSeconds) - no separate restart needed, and _nextSegmentIndex is read fresh
-        // by that tick rather than snapshotted here, so it already reflects however many filler
-        // segments got copied in during the warm-up wait above.
+        // SpliceTickSeconds) - no separate restart needed.
         lock (_lock)
         {
             _isPaused = false;
             _activeSourceDirectory = ResumedMovieDirectory;
-            _activeSourcePrefix = "segment_";
-            _activeSourceCursor = 0;
+            _activeSourcePrefix = "resume_";
+            _activeSourceCursor = Math.Max(0, resumeCursor);
             _pendingDiscontinuityOnNextCopy = true;
             _startedAtUtc = DateTime.UtcNow.AddSeconds(-resumePosition);
         }
 
         StartWatchdog();
-        _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
+        _logger.LogInformation("Movie Night: spike 6 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), pointed back at movie", resumePosition, pausedAt);
         return true;
     }
 
@@ -645,51 +651,39 @@ public sealed class BroadcastManager : IDisposable
     };
 
     /// <summary>
-    /// Waits <paramref name="delaySeconds"/> (the pause/resume grace window - see Pause()), then
-    /// kills <paramref name="staleProcess"/> - a specific captured process reference, not
-    /// necessarily whatever <see cref="_process"/> currently is, since a resume (or another
-    /// pause) may have already reassigned it by the time this fires. Only suppresses
-    /// <see cref="OnProcessExited"/> for this kill if <paramref name="staleProcess"/> is still
-    /// the tracked current process at that moment; if it's already been superseded, its exit
-    /// event correctly no-ops on its own via the existing reference-equality check there.
+    /// Kills <paramref name="process"/>, suppressing <see cref="OnProcessExited"/> only if it's
+    /// still the tracked <see cref="_process"/> at the moment of the call (Resume() calls this
+    /// synchronously, right before reassigning <see cref="_process"/> to the replacement, so the
+    /// suppression window is short and precise - not an independent timer racing against
+    /// whatever else might reassign <see cref="_process"/> in the meantime, which is what made
+    /// the earlier delayed-teardown design (spike 5) buggy).
     /// </summary>
-    private async Task TeardownStaleProcessAfterGraceAsync(Process staleProcess, int delaySeconds, string description)
+    private async Task KillTrackedProcessAsync(Process process)
     {
-        try
+        bool suppressed;
+        lock (_lock)
         {
-            await Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ConfigureAwait(false);
-
-            bool suppressed;
-            lock (_lock)
-            {
-                suppressed = ReferenceEquals(_process, staleProcess);
-                if (suppressed)
-                {
-                    _suppressExitHandling = true;
-                }
-            }
-
-            await KillProcessGracefullyAsync(staleProcess).ConfigureAwait(false);
-
+            suppressed = ReferenceEquals(_process, process);
             if (suppressed)
             {
-                lock (_lock)
-                {
-                    _suppressExitHandling = false;
-                }
+                _suppressExitHandling = true;
             }
-
-            _logger.LogInformation("Movie Night: spike 5 - tore down stale {Description}", description);
         }
-        catch (Exception ex)
+
+        await KillProcessGracefullyAsync(process).ConfigureAwait(false);
+
+        if (suppressed)
         {
-            _logger.LogWarning(ex, "Movie Night: spike 5 - failed to tear down stale {Description}", description);
+            lock (_lock)
+            {
+                _suppressExitHandling = false;
+            }
         }
     }
 
     /// <summary>
     /// SIGTERM, grace period, SIGKILL - on an arbitrary given process, not necessarily
-    /// <see cref="_process"/>. Shared by the delayed pause/resume teardown paths.
+    /// <see cref="_process"/>.
     /// </summary>
     private async Task KillProcessGracefullyAsync(Process process)
     {
@@ -700,7 +694,7 @@ public sealed class BroadcastManager : IDisposable
 
         if (!TrySendSigterm(process))
         {
-            TryKillDirectly(process);
+            await TryKillDirectlyAsync(process).ConfigureAwait(false);
             return;
         }
 
@@ -711,17 +705,26 @@ public sealed class BroadcastManager : IDisposable
         }
         catch (OperationCanceledException)
         {
-            TryKillDirectly(process);
+            await TryKillDirectlyAsync(process).ConfigureAwait(false);
         }
     }
 
-    private static void TryKillDirectly(Process process)
+    /// <summary>
+    /// Kills the process and waits for its exit event to actually fire before returning - a bare
+    /// <c>Process.Kill()</c> only requests termination, it doesn't wait for the OS to report it
+    /// dead. Found via a real bug (2026-08-14 live testing): the caller that suppresses
+    /// <see cref="OnProcessExited"/> around a deliberate kill released that suppression right
+    /// after this returned, but the real exit event sometimes arrived slightly LATER than a bare
+    /// <c>Kill()</c> call, landing unprotected and getting misread as a crash.
+    /// </summary>
+    private static async Task TryKillDirectlyAsync(Process process)
     {
         try
         {
             if (!process.HasExited)
             {
                 process.Kill();
+                await process.WaitForExitAsync().ConfigureAwait(false);
             }
         }
         catch (InvalidOperationException)
@@ -799,9 +802,10 @@ public sealed class BroadcastManager : IDisposable
 
     /// <summary>
     /// Called under <see cref="_lock"/> the first time a broadcast ever pauses: seeds
-    /// <see cref="_servedSegments"/> from whatever <c>segment_*.ts</c> files the (just-killed)
-    /// movie encoder already left in <see cref="HlsDirectory"/>, so the served playlist continues
-    /// from where the client already is rather than jumping backwards.
+    /// <see cref="_servedSegments"/> from whatever <c>segment_*.ts</c> files the movie encoder
+    /// (still running, per Pause()'s "let it run" design) has already produced in
+    /// <see cref="HlsDirectory"/>, so the served playlist continues from where the client already
+    /// is rather than jumping backwards.
     /// </summary>
     private void SeedServedSegmentsFromExistingHlsDirectoryUnlocked()
     {
@@ -826,32 +830,19 @@ public sealed class BroadcastManager : IDisposable
         {
             _servedSegments.RemoveRange(0, _servedSegments.Count - ServedWindowSize);
         }
-
-        var maxIndex = files
-            .Select(ParseSegmentIndex)
-            .Where(i => i.HasValue)
-            .Select(i => i!.Value)
-            .DefaultIfEmpty(-1)
-            .Max();
-        _nextSegmentIndex = maxIndex + 1;
-    }
-
-    private static int? ParseSegmentIndex(string fileName)
-    {
-        var match = Regex.Match(fileName, @"segment_(\d+)\.ts$");
-        return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
     }
 
     /// <summary>
-    /// Copies any new segments the currently-active splice source has produced into
-    /// <see cref="HlsDirectory"/> under continuing <see cref="_nextSegmentIndex"/> numbers, marks
-    /// the first copied segment with a discontinuity if one is pending, and rewrites the served
-    /// playlist. Runs on <see cref="_spliceTimer"/> only - Pause()/Resume() no longer also call
-    /// this directly; that dual-trigger (call once, then also start the timer) was the actual bug
-    /// behind the resume-after-pause failure, not just a missing lock: the manual call and the
-    /// timer's own next tick could both be mid-copy at once, racing to write the same segment
-    /// filename. This guard is a backstop in case a copy is ever slow enough for two ticks to
-    /// overlap regardless.
+    /// Points the served playlist at whatever new segments the currently-active source (filler or
+    /// a resumed movie) has produced since the last tick - no file copying, per Jon: "what we've
+    /// built is largely a pointer for an HLS stream, we need to seamlessly transition pointing
+    /// from one stream to another." Each source keeps writing its own segments, under its own
+    /// filename prefix, in its own directory; this just adds their names to the served list.
+    /// <c>MovieNightController</c> resolves a requested filename to the right directory via
+    /// <see cref="ResolveServedFilePath"/>. Runs on <see cref="_spliceTimer"/> only -
+    /// Pause()/Resume() don't also call this directly; that dual-trigger was a real race found
+    /// live-testing spike 5. This guard is a backstop in case a tick is ever slow enough for the
+    /// next one to fire before it finishes regardless.
     /// </summary>
     private void SpliceTick()
     {
@@ -895,30 +886,12 @@ public sealed class BroadcastManager : IDisposable
             cursor = _activeSourceCursor;
         }
 
-        var copiedAny = false;
+        var addedAny = false;
         while (true)
         {
-            var sourceFile = Path.Combine(sourceDir, $"{sourcePrefix}{cursor:D3}.ts");
-            if (!File.Exists(sourceFile))
+            var sourceFileName = $"{sourcePrefix}{cursor:D3}.ts";
+            if (!File.Exists(Path.Combine(sourceDir, sourceFileName)))
             {
-                break;
-            }
-
-            int destIndex;
-            lock (_lock)
-            {
-                destIndex = _nextSegmentIndex;
-            }
-
-            var destFileName = $"segment_{destIndex:D3}.ts";
-            var destFile = Path.Combine(HlsDirectory, destFileName);
-            try
-            {
-                File.Copy(sourceFile, destFile, overwrite: true);
-            }
-            catch (IOException ex)
-            {
-                _logger.LogWarning(ex, "Movie Night: spike 5 - failed to copy spliced segment {Source}", sourceFile);
                 break;
             }
 
@@ -926,42 +899,65 @@ public sealed class BroadcastManager : IDisposable
             {
                 var markDiscontinuity = _pendingDiscontinuityOnNextCopy;
                 _pendingDiscontinuityOnNextCopy = false;
-                _servedSegments.Add((destFileName, SplicedSegmentSeconds, markDiscontinuity));
+                _servedSegments.Add((sourceFileName, SplicedSegmentSeconds, markDiscontinuity));
                 while (_servedSegments.Count > ServedWindowSize)
                 {
-                    var dropped = _servedSegments[0];
                     _servedSegments.RemoveAt(0);
-                    TryDeleteServedFile(dropped.FileName);
                 }
 
-                _nextSegmentIndex++;
                 _activeSourceCursor = cursor + 1;
             }
 
             cursor++;
-            copiedAny = true;
+            addedAny = true;
         }
 
-        if (copiedAny)
+        if (addedAny)
         {
             WriteServedPlaylist();
         }
     }
 
-    private void TryDeleteServedFile(string fileName)
+    /// <summary>
+    /// Resolves a requested segment filename to its actual physical directory, by prefix -
+    /// <c>segment_</c> is the live/original movie in <see cref="HlsDirectory"/>, <c>filler_</c> is
+    /// the always-running filler, <c>resume_</c> is a resumed movie. Used by
+    /// <c>MovieNightController</c> so it never needs to know these directories exist; also
+    /// re-verifies the resolved path lands inside the target directory (path-traversal guard) and
+    /// that the file actually exists before handing a path back.
+    /// </summary>
+    /// <param name="safeName">An already-validated filename (see MovieNightController's regex) - not raw user input.</param>
+    /// <returns>The full path if it resolves to a real file inside the right directory, otherwise <c>null</c>.</returns>
+    public string? ResolveServedFilePath(string safeName)
     {
-        try
+        string? directory = safeName switch
         {
-            var path = Path.Combine(HlsDirectory, fileName);
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (IOException)
+            _ when safeName.StartsWith("filler_", StringComparison.Ordinal) => FillerDirectory,
+            _ when safeName.StartsWith("resume_", StringComparison.Ordinal) => ResumedMovieDirectory,
+            _ when safeName.StartsWith("segment_", StringComparison.Ordinal) => HlsDirectory,
+            _ => null,
+        };
+
+        if (directory is null)
         {
-            // Best-effort cleanup; a leftover segment file isn't worth failing the splice over.
+            return null;
         }
+
+        var directoryFull = Path.GetFullPath(directory);
+        var fullPath = Path.GetFullPath(Path.Combine(directoryFull, safeName));
+        if (!fullPath.StartsWith(directoryFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // CA3003 flags this as tainted despite the checks above: the analyzer's dataflow doesn't
+        // model the prefix switch + anchored regex validation in MovieNightController plus the
+        // StartsWith directory-containment re-check above as sanitization. safeName is provably
+        // restricted to one of the three known prefixes there, and fullPath is provably inside
+        // whichever directory that prefix maps to.
+#pragma warning disable CA3003
+        return File.Exists(fullPath) ? fullPath : null;
+#pragma warning restore CA3003
     }
 
     /// <summary>
@@ -972,11 +968,9 @@ public sealed class BroadcastManager : IDisposable
     private void WriteServedPlaylist()
     {
         List<(string FileName, double Duration, bool DiscontinuityBefore)> segments;
-        int nextIndex;
         lock (_lock)
         {
             segments = new List<(string, double, bool)>(_servedSegments);
-            nextIndex = _nextSegmentIndex;
         }
 
         if (segments.Count == 0)
@@ -984,7 +978,9 @@ public sealed class BroadcastManager : IDisposable
             return;
         }
 
-        var mediaSequence = Math.Max(0, nextIndex - segments.Count);
+        // The exact starting number doesn't matter to any player - EXT-X-MEDIA-SEQUENCE just has
+        // to be a stable per-playlist-write value; nothing here parses it back out.
+        var mediaSequence = 0;
         var sb = new StringBuilder();
         sb.Append("#EXTM3U\n");
         sb.Append("#EXT-X-VERSION:3\n");

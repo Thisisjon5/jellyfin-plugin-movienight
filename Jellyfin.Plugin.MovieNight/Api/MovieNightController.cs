@@ -24,8 +24,10 @@ public class MovieNightController : ControllerBase
 
     // ffmpeg's -hls_segment_filename uses %03d (minimum 3 digits, not a cap) - a broadcast running
     // past segment 999 (i.e. beyond ~66 minutes at 4s/segment) produces 4+ digit names, so this
-    // must not anchor to exactly 3 digits.
-    private static readonly Regex SegmentFileNamePattern = new(@"^segment_\d+\.ts$", RegexOptions.Compiled);
+    // must not anchor to exactly 3 digits. The three prefixes correspond to the three encoders
+    // spike 5's video-switcher design can be pointing at: the live/original movie, the always-
+    // running filler, and a resumed movie - see BroadcastManager.ResolveServedFilePath.
+    private static readonly Regex SegmentFileNamePattern = new(@"^(?:segment|filler|resume)_\d+\.ts$", RegexOptions.Compiled);
 
     private readonly IServerApplicationHost _appHost;
     private readonly BroadcastManager _broadcastManager;
@@ -69,10 +71,12 @@ public class MovieNightController : ControllerBase
     }
 
     /// <summary>
-    /// Serves the live broadcast's HLS master playlist and segments from
-    /// <see cref="BroadcastManager.HlsDirectory"/> - <c>master.m3u8</c> and <c>segment_NNN.ts</c>
-    /// are both matched here, dispatched internally, so there's no route ambiguity between a
-    /// literal and a parameterized template for the same URL shape.
+    /// Serves the live broadcast's HLS master playlist (always from
+    /// <see cref="BroadcastManager.HlsDirectory"/>, hand-written by BroadcastManager) and segments
+    /// (resolved to whichever source directory actually holds them, by filename prefix - see
+    /// <see cref="BroadcastManager.ResolveServedFilePath"/>). Both are matched by this one route,
+    /// dispatched internally, so there's no route ambiguity between a literal and a parameterized
+    /// template for the same URL shape.
     /// </summary>
     /// <param name="fileName">Either <c>master.m3u8</c> or a segment file name like <c>segment_000.ts</c>.</param>
     /// <returns>The requested file, 404 if missing/invalid, or 403 if the caller isn't loopback.</returns>
@@ -86,33 +90,19 @@ public class MovieNightController : ControllerBase
 
         var safeName = Path.GetFileName(fileName);
         var isMasterPlaylist = string.Equals(safeName, MasterPlaylistFileName, StringComparison.Ordinal);
-        if (!isMasterPlaylist && !SegmentFileNamePattern.IsMatch(safeName))
+        if (isMasterPlaylist)
+        {
+            var masterPath = Path.Combine(Path.GetFullPath(_broadcastManager.HlsDirectory), MasterPlaylistFileName);
+            return System.IO.File.Exists(masterPath) ? PhysicalFile(masterPath, "application/vnd.apple.mpegurl") : NotFound();
+        }
+
+        if (!SegmentFileNamePattern.IsMatch(safeName))
         {
             return NotFound();
         }
 
-        // Belt-and-suspenders against path traversal: safeName is already restricted to either the
-        // exact literal "master.m3u8" or the anchored segment pattern, then re-verify the resolved
-        // full path still lands inside HlsDirectory before touching the filesystem.
-        var hlsDirectoryFull = Path.GetFullPath(_broadcastManager.HlsDirectory);
-        var fullPath = Path.GetFullPath(Path.Combine(hlsDirectoryFull, safeName));
-        if (!fullPath.StartsWith(hlsDirectoryFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            return NotFound();
-        }
-
-        // CA3003 flags this as tainted despite the checks above: the analyzer's dataflow doesn't
-        // model an anchored Regex.IsMatch/exact-literal-equals as sanitization. safeName is provably
-        // restricted to "master.m3u8" or ^segment_\d+\.ts$, and fullPath is provably inside HlsDirectory.
-#pragma warning disable CA3003
-        if (!System.IO.File.Exists(fullPath))
-        {
-            return NotFound();
-        }
-#pragma warning restore CA3003
-
-        var contentType = isMasterPlaylist ? "application/vnd.apple.mpegurl" : "video/mp2t";
-        return PhysicalFile(fullPath, contentType);
+        var fullPath = _broadcastManager.ResolveServedFilePath(safeName);
+        return fullPath is null ? NotFound() : PhysicalFile(fullPath, "video/mp2t");
     }
 
     /// <summary>
