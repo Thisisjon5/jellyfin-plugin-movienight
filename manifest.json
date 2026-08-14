@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.8.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.8.0/jellyfin-plugin-movienight_0.3.8.0.zip",
+        "checksum": "799f3209c37a84c2a53776e5f5d6b1a5",
+        "timestamp": "2026-08-14T18:41:20Z",
+        "changelog": "Fixes spike 5's live test failure: filler encoder now starts continuously right after Go Live instead of on-demand at pause time, closing the gap that made Jellyfin's downstream remux treat the paused stream as ended."
+      },
+      {
         "version": "0.3.7.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.7.0/jellyfin-plugin-movienight_0.3.7.0.zip",
