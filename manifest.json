@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.7.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.7.0/jellyfin-plugin-movienight_0.3.7.0.zip",
+        "checksum": "327a2583504412b689bbf5bc128cc5c9",
+        "timestamp": "2026-08-14T18:29:11Z",
+        "changelog": "Spike 5 for universal pause: replaces spike 4's SIGSTOP approach (mechanically clean but desynced across clients due to Jellyfin's own remux hop) with the filler-channel splice mechanism ruled in planning/DECISIONS.md - a background filler encoder spliced into the served playlist with EXT-X-DISCONTINUITY on pause, movie encoder respawned and spliced back in on resume."
+      },
+      {
         "version": "0.3.6.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.6.0/jellyfin-plugin-movienight_0.3.6.0.zip",
