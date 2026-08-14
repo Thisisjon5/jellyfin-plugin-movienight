@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.17.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.17.0/jellyfin-plugin-movienight_0.3.17.0.zip",
+        "checksum": "11754edfaba7668bfdba66a4d003b77e",
+        "timestamp": "2026-08-14T23:00:00Z",
+        "changelog": "Single-process/multi-input switcher spike: adds a third always-tunable test channel (\"Movie Night (switcher spike)\") - one continuous ffmpeg process with 3 static color/tone inputs, switched live via a streamselect filter controlled over ffmpeg's zmq socket (POST /MovieNight/api/debug/switcher-select?input=N). Tests lossless switching among static sources through Jellyfin's remux hop, and whether this ffmpeg build includes libzmq/zmqsend support at all."
+      },
+      {
         "version": "0.3.16.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.16.0/jellyfin-plugin-movienight_0.3.16.0.zip",
