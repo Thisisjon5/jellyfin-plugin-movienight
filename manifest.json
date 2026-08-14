@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.0.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.0.0/jellyfin-plugin-movienight_0.3.0.0.zip",
+        "checksum": "79fe4964be35aae4fa3d408638f57165",
+        "timestamp": "2026-08-14T00:05:42Z",
+        "changelog": "Phase 2 - BroadcastManager (real ffmpeg lifecycle: Go Live/Stop, single-rung 720p H.264/AAC encode, natural-end/crash/stall/disk-guard handling, no auto-restart), FfmpegCommandBuilder (unit-tested per spec 5.3's HW accel matrix - QSV/VAAPI/NVENC/AMF/software), and the empty-vs-populated playlist trick so the channel only appears in the guide while actually live. Phase 1's embedded static test clip is gone - stream/playlist/epg now serve the real broadcast. Minimal dev test harness on the config page (item ID input + Go Live/Stop + status polling) - the real movie picker is Phase 3."
+      },
+      {
         "version": "0.2.6.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.6.0/jellyfin-plugin-movienight_0.2.6.0.zip",
