@@ -70,7 +70,11 @@ public static class FfmpegCommandBuilder
         switch (accel)
         {
             case HardwareAccel.Qsv:
-                args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "scale_qsv=-2:720"]);
+                // Software decode hands scale_qsv system-memory frames it can't read - hwupload
+                // first, same reason the VAAPI branch below does it. Root-caused via a live
+                // failure: "Impossible to convert between the formats supported by the filter
+                // ... and the filter 'auto_scale_0'" with a bare scale_qsv filter.
+                args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-2:720"]);
                 break;
             case HardwareAccel.Vaapi when !string.IsNullOrEmpty(vaapiDevice):
                 args.AddRange(["-init_hw_device", $"vaapi=hw:{vaapiDevice}", "-filter_hw_device", "hw", "-c:v", "h264_vaapi", "-vf", "format=nv12,hwupload,scale_vaapi=-2:720"]);

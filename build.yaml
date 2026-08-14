@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.0.0"
+version: "0.3.1.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,13 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.1.0: Fixes a real QSV broadcast failure hit on first live Go Live test
+  against this NAS's Intel QSV hardware - ffmpeg exited (code 218) with
+  "Impossible to convert between the formats supported by the filter ... and
+  the filter 'auto_scale_0'". Root cause: the QSV video-filter chain fed
+  scale_qsv software-decoded frames instead of QSV-resident ones (the VAAPI
+  branch already hwuploads first; QSV didn't). Fixed by adding
+  format=nv12,hwupload=extra_hw_frames=64 before scale_qsv, mirroring VAAPI.
   0.3.0.0: Phase 2 - BroadcastManager (real ffmpeg lifecycle: Go Live/Stop,
   single-rung 720p H.264/AAC encode, natural-end/crash/stall/disk-guard
   handling, no auto-restart), FfmpegCommandBuilder (unit-tested per §5.3's
