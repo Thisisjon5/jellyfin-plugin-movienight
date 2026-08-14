@@ -30,6 +30,8 @@ public sealed class BroadcastManager : IDisposable
     private const int SegmentStallSeconds = 30;
     private const long DiskGuardBytes = 2L * 1024 * 1024 * 1024;
     private const int Sigterm = 15;
+    private const int Sigstop = 19;
+    private const int Sigcont = 18;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -47,10 +49,6 @@ public sealed class BroadcastManager : IDisposable
     private DateTime? _startedAtUtc;
     private long? _runTimeTicks;
     private string? _lastFailureReason;
-    private string? _currentItemPath;
-    private HardwareAccel _currentAccel;
-    private string? _currentVaapiDevice;
-    private bool _suppressExitHandling;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BroadcastManager"/> class.
@@ -156,9 +154,6 @@ public sealed class BroadcastManager : IDisposable
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var accel = MapHardwareAccel(encodingOptions.HardwareAccelerationType);
         var args = FfmpegCommandBuilder.Build(item.Path, HlsDirectory, accel, encodingOptions.VaapiDevice);
-        _currentItemPath = item.Path;
-        _currentAccel = accel;
-        _currentVaapiDevice = encodingOptions.VaapiDevice;
 
         var startInfo = new ProcessStartInfo
         {
@@ -295,164 +290,61 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
-    /// SPIKE (2026-08-14, see planning/DECISIONS.md universal-pause entry): swaps the running
-    /// encoder for a synthetic frozen-frame source, without touching state/HLS directory/guide -
-    /// testing whether an already-tuned client survives an encoder swap transparently (no client
-    /// command push). Writes to the same master.m3u8/segment_%03d.ts names so an in-progress
-    /// client's playlist polling is undisturbed. Not resume-position-aware; not the real feature.
+    /// SPIKE 4 (2026-08-14, see planning/DECISIONS.md universal-pause entry): suspends the SAME
+    /// running ffmpeg process via SIGSTOP, rather than killing it and spawning a replacement -
+    /// spike 3 (kill + spawn a synthetic frozen source) produced a broadcast that stopped writing
+    /// segments and tripped the stall watchdog, root cause not diagnosed. SIGSTOP freezes the
+    /// process exactly where it is (no new segments, no CPU/IO) with nothing to reconstruct on
+    /// resume. Suspends the stall watchdog too, since a deliberately-frozen encoder isn't a stall.
     /// </summary>
-    /// <returns><c>true</c> if the frozen encoder started.</returns>
-    public async Task<bool> FreezeAsync()
+    /// <returns><c>true</c> if the encoder was suspended.</returns>
+    public bool Freeze()
     {
         lock (_lock)
         {
-            if (_state != BroadcastState.Live)
-            {
-                return false;
-            }
-        }
-
-        await KillCurrentProcessGracefullyAsync().ConfigureAwait(false);
-
-        var args = new List<string>
-        {
-            "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30",
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
-            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
-            "-c:a", "aac", "-b:a", "96k", "-ac", "2",
-            "-force_key_frames", "expr:gte(t,n_forced*2)",
-            "-f", "hls",
-            "-hls_time", "4",
-            "-hls_list_size", "10",
-            "-hls_flags", "delete_segments+independent_segments",
-            "-hls_segment_filename", Path.Combine(HlsDirectory, "segment_%03d.ts"),
-            Path.Combine(HlsDirectory, "master.m3u8"),
-        };
-
-        return SpawnSpikeProcess(args);
-    }
-
-    /// <summary>
-    /// SPIKE counterpart to <see cref="FreezeAsync"/>: kills the frozen encode and respawns the
-    /// real broadcast from the beginning of the file - exact resume position is out of scope for
-    /// this spike, which only tests whether the swap itself is transparent to an already-tuned
-    /// client.
-    /// </summary>
-    /// <returns><c>true</c> if the real encoder restarted.</returns>
-    public async Task<bool> UnfreezeAsync()
-    {
-        string? itemPath;
-        HardwareAccel accel;
-        string? vaapiDevice;
-        lock (_lock)
-        {
-            if (_state != BroadcastState.Live || _currentItemPath is null)
+            if (_state != BroadcastState.Live || _process is null || _process.HasExited)
             {
                 return false;
             }
 
-            itemPath = _currentItemPath;
-            accel = _currentAccel;
-            vaapiDevice = _currentVaapiDevice;
-        }
-
-        await KillCurrentProcessGracefullyAsync().ConfigureAwait(false);
-
-        var args = FfmpegCommandBuilder.Build(itemPath, HlsDirectory, accel, vaapiDevice);
-        return SpawnSpikeProcess(args);
-    }
-
-    /// <summary>
-    /// Kills the current process (SIGTERM, grace, SIGKILL) without touching state, the HLS
-    /// directory, or the guide - the piece <see cref="StopAsync"/> does NOT share, because Stop
-    /// intentionally resets all of that and this must not. Marks the exit as intentional first so
-    /// <see cref="OnProcessExited"/> does not treat the swap as a crash or natural end.
-    /// </summary>
-    private async Task KillCurrentProcessGracefullyAsync()
-    {
-        Process? process;
-        lock (_lock)
-        {
-            _suppressExitHandling = true;
-            process = _process;
-        }
-
-        if (process is not null && !process.HasExited)
-        {
-            if (!TrySendSigterm(process))
+            var result = NativeKill(_process.Id, Sigstop);
+            if (result != 0)
             {
-                lock (_lock)
-                {
-                    KillProcessUnlocked();
-                }
+                _logger.LogError("Movie Night: spike freeze - SIGSTOP failed (libc kill returned {Result})", result);
+                return false;
             }
-            else
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
-                try
-                {
-                    await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    lock (_lock)
-                    {
-                        KillProcessUnlocked();
-                    }
-                }
-            }
+
+            StopWatchdogUnlocked();
+            _logger.LogInformation("Movie Night: spike freeze - encoder suspended (SIGSTOP)");
+            return true;
         }
     }
 
     /// <summary>
-    /// SPIKE process-spawn helper shared by <see cref="FreezeAsync"/>/<see cref="UnfreezeAsync"/>.
-    /// Deliberately separate from GoLiveAsync's own spawn code rather than a shared refactor - this
-    /// is throwaway spike code and GoLiveAsync's path is already hardened by real production use.
+    /// SPIKE 4 counterpart to <see cref="Freeze"/>: resumes the same suspended process via SIGCONT
+    /// - it continues encoding exactly where it left off, no restart, no lost position.
     /// </summary>
-    private bool SpawnSpikeProcess(IReadOnlyList<string> args)
+    /// <returns><c>true</c> if the encoder was resumed.</returns>
+    public bool Unfreeze()
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _mediaEncoder.EncoderPath,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
-
-        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        var stderrTail = new StderrTailBuffer();
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is not null)
-            {
-                stderrTail.Add(e.Data);
-            }
-        };
-        process.Exited += (_, _) => OnProcessExited(process, stderrTail);
-
-        try
-        {
-            process.Start();
-            process.BeginErrorReadLine();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Movie Night: spike freeze/unfreeze failed to start ffmpeg");
-            return false;
-        }
-
         lock (_lock)
         {
-            _process = process;
-            _stderrTail = stderrTail;
-            _suppressExitHandling = false;
+            if (_state != BroadcastState.Live || _process is null || _process.HasExited)
+            {
+                return false;
+            }
+
+            var result = NativeKill(_process.Id, Sigcont);
+            if (result != 0)
+            {
+                _logger.LogError("Movie Night: spike freeze - SIGCONT failed (libc kill returned {Result})", result);
+                return false;
+            }
+
+            _logger.LogInformation("Movie Night: spike freeze - encoder resumed (SIGCONT)");
         }
 
+        StartWatchdog();
         return true;
     }
 
@@ -544,13 +436,6 @@ public sealed class BroadcastManager : IDisposable
     {
         lock (_lock)
         {
-            if (_suppressExitHandling)
-            {
-                // A spike Freeze/Unfreeze swap killed this process on purpose; it is not the
-                // broadcast ending. See FreezeAsync/UnfreezeAsync.
-                return;
-            }
-
             if (!ReferenceEquals(_process, process))
             {
                 // Already stopped/replaced by StopAsync or a new GoLiveAsync; nothing to do.
@@ -622,7 +507,7 @@ public sealed class BroadcastManager : IDisposable
             if (IsSegmentStale())
             {
                 _logger.LogError("Movie Night: no new HLS segment in over {Seconds}s, treating as stalled", SegmentStallSeconds);
-                SetFailedUnlocked("Encoder stalled - no new HLS segment written in time");
+                SetFailedUnlocked($"Encoder stalled - no new HLS segment written in time. ffmpeg stderr: {_stderrTail}");
                 KillProcessUnlocked();
                 StopWatchdogUnlocked();
                 return;

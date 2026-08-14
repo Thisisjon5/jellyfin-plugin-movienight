@@ -37,28 +37,26 @@ public class MovieNightDebugController : ControllerBase
     }
 
     /// <summary>
-    /// Spike 3: swaps the running encoder for a frozen-frame source, without touching state/HLS
-    /// directory/guide, to test whether an already-tuned client survives the swap transparently -
-    /// no client command push, just the shared live stream changing what it's carrying.
+    /// Spike 4: suspends the running encoder (SIGSTOP) without touching state/HLS directory/guide,
+    /// to test whether an already-tuned client survives the freeze cleanly - no client command
+    /// push, just the shared live stream pausing what it's carrying.
     /// </summary>
-    /// <returns>200 if the frozen encoder started, 409 if the broadcast isn't Live.</returns>
+    /// <returns>200 if the encoder was suspended, 409 if the broadcast isn't Live.</returns>
     [HttpPost("freeze")]
-    public async Task<ActionResult> Freeze()
+    public ActionResult Freeze()
     {
-        var ok = await _broadcastManager.FreezeAsync().ConfigureAwait(false);
-        return ok ? Ok() : Conflict();
+        return _broadcastManager.Freeze() ? Ok() : Conflict();
     }
 
     /// <summary>
-    /// Spike 3 counterpart: kills the frozen encode and respawns the real broadcast (from the
-    /// beginning of the file - not the paused position, out of scope for this spike).
+    /// Spike 4 counterpart: resumes the suspended encoder (SIGCONT) - it continues exactly where
+    /// it left off, no restart, no lost position.
     /// </summary>
-    /// <returns>200 if the real encoder restarted, 409 if the broadcast isn't Live.</returns>
+    /// <returns>200 if the encoder was resumed, 409 if the broadcast isn't Live.</returns>
     [HttpPost("unfreeze")]
-    public async Task<ActionResult> Unfreeze()
+    public ActionResult Unfreeze()
     {
-        var ok = await _broadcastManager.UnfreezeAsync().ConfigureAwait(false);
-        return ok ? Ok() : Conflict();
+        return _broadcastManager.Unfreeze() ? Ok() : Conflict();
     }
 
     /// <summary>
