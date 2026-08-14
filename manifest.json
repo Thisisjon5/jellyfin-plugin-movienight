@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.4.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.4.0/jellyfin-plugin-movienight_0.3.4.0.zip",
+        "checksum": "0e7b8737d6b5868dd619acb536b9a76f",
+        "timestamp": "2026-08-14T16:23:59Z",
+        "changelog": "Spike build for the universal-pause architecture decision (see planning/DECISIONS.md) - adds temporary admin-only debug endpoints (/MovieNight/api/debug/sessions, /MovieNight/api/debug/playstate) to verify two open questions before any real pause code is written: does SessionInfo.PlayState report correctly for a Live TV tuner session, and does ISessionManager.SendPlaystateCommand get honored by real clients. No user-facing change."
+      },
+      {
         "version": "0.3.3.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.3.0/jellyfin-plugin-movienight_0.3.3.0.zip",
