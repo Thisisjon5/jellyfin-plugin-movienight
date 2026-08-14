@@ -33,6 +33,17 @@ retry. Phase 2's real BroadcastManager won't have this problem (continuous ffmpe
 process, not a finite pre-baked clip) — no fix needed unless Phase 1 spike assets
 get reused for further manual testing, in which case regenerate at 60-90s.
 
+**Phase 2 — DONE (2026-08-14), v0.3.3.0.** Gate met: Go Live actually spawns
+ffmpeg, encodes via the NAS's real Intel QSV hardware, serves HLS, and the
+guide picks it up promptly; natural end and explicit Stop both leave no
+orphan ffmpeg process (confirmed via `nas_memory_status` process list after
+each cycle). `BroadcastManager` (state machine + process lifecycle + stall/
+disk-guard watchdog) and `FfmpegCommandBuilder` (HW accel matrix, unit-tested)
+built clean, but the *first real* Go Live test against actual hardware found
+three genuine bugs no amount of unit testing would've caught — see gotchas.
+Not yet run: the spec's full "20 start/stop cycles" stress test — only a
+handful of manual cycles done today, all clean.
+
 ## Build
 
 ```
@@ -96,6 +107,44 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   startup sequence, requiring a second restart to actually load it. Always verify
   via `nas_container_logs` (`Loaded plugin: Movie Night X.Y.Z.W`) after restarting,
   don't assume one restart cycle was enough.
+- **Trigger "Update Plugins" via `ApiClient.startScheduledTask(<taskId>)` from a
+  browser JS console, not the dashboard button** — the dashboard tab can go
+  visually unresponsive/backdrop-stuck under NAS memory pressure (see below),
+  and the scheduled-task run button silently no-ops if the click doesn't land.
+  Look up the task ID via `(await ApiClient.getScheduledTasks()).find(t =>
+  t.Name === 'Update Plugins')`. Same trick works to fill the config-page test
+  harness's fields when the page renders behind a stuck backdrop image: set
+  `.value` via the native property setter + dispatch an `input` event, don't
+  rely on `computer` tool clicks landing on the right element.
+- **raw.githubusercontent.com is CDN-cached per edge node** — pushing a
+  manifest.json update and immediately triggering "Update Plugins" on the NAS
+  can install nothing new even though `curl` from elsewhere already sees the
+  fresh content, because the NAS's request hit a different (stale) edge. Wait
+  ~30-60s after a manifest push before triggering an install if it silently
+  no-ops the first time.
+- **QSV's `scale_qsv` filter needs an explicit `hwupload` first** and only
+  accepts `-1` (not `-2`) for the "keep aspect" dimension — found via the
+  actual first live Go Live test against this NAS's Intel QSV hardware, not
+  in review. Bare `scale_qsv=-2:720` fails two different ways: (1) software-
+  decoded frames aren't QSV-resident, "Impossible to convert between the
+  formats..." — fix: `format=nv12,hwupload=extra_hw_frames=64,scale_qsv=...`
+  first (mirrors what the VAAPI branch already did); (2) even after that,
+  `-2` triggers "Size values less than -1 are not acceptable" — QSV only
+  accepts `-1`. VAAPI/software `scale`/`scale_vaapi` are unaffected (both
+  accept `-2`) but are untested against real hardware — same class of bug
+  could exist there, not yet exercised live.
+- **Jellyfin's "Refresh Guide" scheduled task only runs once every 24h by
+  default** (`IntervalTicks: 864000000000` = exactly 1 day, confirmed via
+  `ApiClient.getScheduledTasks()`) — a guide-based client (Roku) showed "no
+  schedule information" through an entire test broadcast because nothing
+  forced a refresh after Go Live. `TunerRegistrar` already got one refresh
+  for free (registering a listing provider triggers it), but that's once at
+  startup only. `BroadcastManager` now injects `IGuideManager` and calls
+  `RefreshGuide(new Progress<double>(), ct)` fire-and-forget on every state
+  change (Go Live, natural end, crash, Stop) — the method Jellyfin's own
+  "Refresh Guide" task calls internally, found via the same reflection-
+  against-cached-NuGet-DLLs technique used for the Phase 1 tuner research
+  (`MediaBrowser.Controller.LiveTv.IGuideManager`).
 
 ## Standing rules
 
