@@ -74,7 +74,10 @@ public static class FfmpegCommandBuilder
                 // first, same reason the VAAPI branch below does it. Root-caused via a live
                 // failure: "Impossible to convert between the formats supported by the filter
                 // ... and the filter 'auto_scale_0'" with a bare scale_qsv filter.
-                args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-2:720"]);
+                // scale_qsv also rejects the round-to-even "-2" width libavfilter's software
+                // scale/scale_vaapi accept ("Size values less than -1 are not acceptable",
+                // root-caused via a second live failure) - QSV only accepts -1.
+                args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-1:720"]);
                 break;
             case HardwareAccel.Vaapi when !string.IsNullOrEmpty(vaapiDevice):
                 args.AddRange(["-init_hw_device", $"vaapi=hw:{vaapiDevice}", "-filter_hw_device", "hw", "-c:v", "h264_vaapi", "-vf", "format=nv12,hwupload,scale_vaapi=-2:720"]);
