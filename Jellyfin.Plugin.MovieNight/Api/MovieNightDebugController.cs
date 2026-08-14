@@ -98,4 +98,13 @@ public class MovieNightDebugController : ControllerBase
         var (success, output) = await _broadcastManager.SendSwitcherSpikeCommandAsync(input, cancellationToken).ConfigureAwait(false);
         return success ? Ok(output) : Conflict(output);
     }
+
+    /// <summary>
+    /// Diagnostic snapshot of every encoder output directory (added 2026-08-14 for the 25fps Go
+    /// Live stall - see BroadcastManager.DescribeOutputDirectories). Poll this DURING a Starting
+    /// broadcast to see whether ffmpeg is actually writing segments.
+    /// </summary>
+    /// <returns>Per-directory existence plus file names, sizes, and last-write times.</returns>
+    [HttpGet("encoder-dirs")]
+    public ActionResult GetEncoderDirs() => Ok(_broadcastManager.DescribeOutputDirectories());
 }

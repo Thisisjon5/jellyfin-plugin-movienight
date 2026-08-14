@@ -1,236 +1,244 @@
 [
-  {
-    "guid": "8a6e5cf0-30f3-420a-a8ce-e7704d690f94",
-    "name": "Movie Night",
-    "description": "Broadcast a movie from your library as a live, owner-controlled Live TV channel.",
-    "overview": "Broadcast a movie from your library as a live, owner-controlled Live TV channel",
-    "owner": "Thisisjon5",
-    "category": "Live TV",
-    "versions": [
-      {
-        "version": "0.3.19.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.19.0/jellyfin-plugin-movienight_0.3.19.0.zip",
-        "checksum": "aa21f78da4e586a5d67d75ce08957966",
-        "timestamp": "2026-08-14T23:35:00Z",
-        "changelog": "Fixes a real double-Go-Live race found live within minutes of shipping v0.3.18.0's self-service UI - the Go Live button gave no in-progress feedback, so a double-click fired two concurrent GoLiveAsync calls that both spawned ffmpeg into the same directory and stomped each other. Fixed at the root (the already-Starting/Live check and the state claim now happen atomically, before the only await) plus button debouncing on the config page as defense-in-depth."
-      },
-      {
-        "version": "0.3.18.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.18.0/jellyfin-plugin-movienight_0.3.18.0.zip",
-        "checksum": "fafd8ce41ad8cb0059d4b186a501580b",
-        "timestamp": "2026-08-14T23:20:00Z",
-        "changelog": "Real self-service controls on the config page: a Pause/Resume toggle button next to Go Live/Stop (promoted from debug-only endpoints to real /MovieNight/api/pause and /resume), a client-sessions panel, and checkboxes to enable/disable the raw-TS and switcher spike test channels (off by default - they no longer show up in the Live TV channel list unless explicitly turned on). No curl commands needed to drive any of this anymore."
-      },
-      {
-        "version": "0.3.17.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.17.0/jellyfin-plugin-movienight_0.3.17.0.zip",
-        "checksum": "11754edfaba7668bfdba66a4d003b77e",
-        "timestamp": "2026-08-14T23:00:00Z",
-        "changelog": "Single-process/multi-input switcher spike: adds a third always-tunable test channel (\"Movie Night (switcher spike)\") - one continuous ffmpeg process with 3 static color/tone inputs, switched live via a streamselect filter controlled over ffmpeg's zmq socket (POST /MovieNight/api/debug/switcher-select?input=N). Tests lossless switching among static sources through Jellyfin's remux hop, and whether this ffmpeg build includes libzmq/zmqsend support at all."
-      },
-      {
-        "version": "0.3.16.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.16.0/jellyfin-plugin-movienight_0.3.16.0.zip",
-        "checksum": "f168a5fb697cc9f114a4766f36b56553",
-        "timestamp": "2026-08-14T22:40:00Z",
-        "changelog": "Raw MPEG-TS tuner spike: adds a second, always-tunable test channel (\"Movie Night (raw TS spike)\") that pipes a synthetic testsrc/tone ffmpeg process's raw MPEG-TS stdout straight to the client, independent of the real broadcast's state machine. Tests whether Jellyfin's M3U tuner accepts and remuxes a raw continuous-stream URL the same way it does hand-rolled HLS."
-      },
-      {
-        "version": "0.3.15.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.15.0/jellyfin-plugin-movienight_0.3.15.0.zip",
-        "checksum": "8b5697ee23dcd596e2391415748d9aaa",
-        "timestamp": "2026-08-14T22:15:00Z",
-        "changelog": "Fixes the dual-writer collision diagnosed right after spike 6's live test (the browser/Roku flip-flop between paused-filler and live-movie content): the movie encoder now writes into its own private directory from Go Live, instead of writing directly into the served HlsDirectory. BroadcastManager owns the served master.m3u8 for the whole broadcast lifetime now, not just after the first pause. Also fixes the stall watchdog and disk guard, which broke as a side effect of HlsDirectory no longer holding segment files."
-      },
-      {
-        "version": "0.3.14.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.14.0/jellyfin-plugin-movienight_0.3.14.0.zip",
-        "checksum": "0b06a0a3d7472cfaa83576bb7a2919d1",
-        "timestamp": "2026-08-14T20:54:41Z",
-        "changelog": "Spike 6: reworks the splice mechanism into a true pointer model - each encoder writes under its own distinct filename prefix, in its own directory, and the controller resolves a requested segment to the right directory. No file copying anywhere, movie encoder left running through the whole pause and only torn down synchronously when resume actually needs to replace it."
-      },
-      {
-        "version": "0.3.13.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.13.0/jellyfin-plugin-movienight_0.3.13.0.zip",
-        "checksum": "1628e78dfe2c188a7e0fa56dc4c87bed",
-        "timestamp": "2026-08-14T20:35:12Z",
-        "changelog": "Generalizes the video-switcher principle to both transitions: resume now runs the new movie encoder for an extra 30s buffer before cutting over, and pause keeps the old movie encoder alive for a 60s grace window after switching to filler instead of killing it immediately. Never cut to a source before it's rolling, never tear down the old one the instant you cut away."
-      },
-      {
-        "version": "0.3.12.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.12.0/jellyfin-plugin-movienight_0.3.12.0.zip",
-        "checksum": "62b81a4b8cdd563c38266419b7651fa2",
-        "timestamp": "2026-08-14T20:27:58Z",
-        "changelog": "Fixes the actual cause of resume never playing: Resume() stopped the filler feed before the new movie encoder was ready, stalling the served playlist during the whole warm-up window. We're building a video switcher, and a switcher never cuts to a source before it's rolling - the filler now stays live the entire time the movie encoder warms up in the background."
-      },
-      {
-        "version": "0.3.11.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.11.0/jellyfin-plugin-movienight_0.3.11.0.zip",
-        "checksum": "11239e8abf28a9b560938a3eefdabd92",
-        "timestamp": "2026-08-14T20:01:13Z",
-        "changelog": "A/B live-tested 0.3.10.0 against 0.3.9.0 on identical conditions - confirmed 0.3.10.0's trigger change regressed the pause path even though it was aimed at fixing resume. Restores Pause() to 0.3.9.0's proven pattern; Resume() keeps 0.3.10.0's fix."
-      },
-      {
-        "version": "0.3.10.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.10.0/jellyfin-plugin-movienight_0.3.10.0.zip",
-        "checksum": "10af560c99360e875bfab86999ac8f87",
-        "timestamp": "2026-08-14T19:08:56Z",
-        "changelog": "Fixes the real race behind the resume-freeze bug: Pause()/Resume() had two separate triggers for the splice-copy timer that could run concurrently and collide on the same segment filename. Now there's one trigger plus a re-entrancy guard. Also bumps the pause rewind from 15s to 60s to match real round-trip latency. NOTE: this version's Pause()-side trigger change was later found (0.3.11.0) to regress the pause path - do not use standalone."
-      },
-      {
-        "version": "0.3.9.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.9.0/jellyfin-plugin-movienight_0.3.9.0.zip",
-        "checksum": "03e48c466766df8ced396e1ed393597a",
-        "timestamp": "2026-08-14T18:50:23Z",
-        "changelog": "Fixes resume-crash bug in 0.3.8.0: Resume() now restarts the periodic splice-copy timer, same as Pause() does, so the served playlist keeps updating after resume instead of stalling out."
-      },
-      {
-        "version": "0.3.8.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.8.0/jellyfin-plugin-movienight_0.3.8.0.zip",
-        "checksum": "799f3209c37a84c2a53776e5f5d6b1a5",
-        "timestamp": "2026-08-14T18:41:20Z",
-        "changelog": "Fixes spike 5's live test failure: filler encoder now starts continuously right after Go Live instead of on-demand at pause time, closing the gap that made Jellyfin's downstream remux treat the paused stream as ended."
-      },
-      {
-        "version": "0.3.7.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.7.0/jellyfin-plugin-movienight_0.3.7.0.zip",
-        "checksum": "327a2583504412b689bbf5bc128cc5c9",
-        "timestamp": "2026-08-14T18:29:11Z",
-        "changelog": "Spike 5 for universal pause: replaces spike 4's SIGSTOP approach (mechanically clean but desynced across clients due to Jellyfin's own remux hop) with the filler-channel splice mechanism ruled in planning/DECISIONS.md - a background filler encoder spliced into the served playlist with EXT-X-DISCONTINUITY on pause, movie encoder respawned and spliced back in on resume."
-      },
-      {
-        "version": "0.3.6.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.6.0/jellyfin-plugin-movienight_0.3.6.0.zip",
-        "checksum": "0c1773b7d6326b8ff3919da4005f21b6",
-        "timestamp": "2026-08-14T17:29:21Z",
-        "changelog": "Spike 4 for universal pause: SIGSTOP/SIGCONT on the same running ffmpeg process instead of killing and respawning a synthetic frozen source (spike 3 broke - stopped writing segments, tripped the stall watchdog). Also fixes missing stderr capture on the stall-watchdog failure path."
-      },
-      {
-        "version": "0.3.5.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.5.0/jellyfin-plugin-movienight_0.3.5.0.zip",
-        "checksum": "b40b4b5ed26a34ef7ff67898346ea4c8",
-        "timestamp": "2026-08-14T17:17:35Z",
-        "changelog": "Spike 3 for universal pause: freeze/unfreeze the shared encoder instead of pushing a playstate command to each client (spike 2 found that doesn't work). Adds BroadcastManager.FreezeAsync/UnfreezeAsync + debug endpoints /MovieNight/api/debug/freeze and /unfreeze. Debug-only, not the real feature."
-      },
-      {
-        "version": "0.3.4.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.4.0/jellyfin-plugin-movienight_0.3.4.0.zip",
-        "checksum": "0e7b8737d6b5868dd619acb536b9a76f",
-        "timestamp": "2026-08-14T16:23:59Z",
-        "changelog": "Spike build for the universal-pause architecture decision (see planning/DECISIONS.md) - adds temporary admin-only debug endpoints (/MovieNight/api/debug/sessions, /MovieNight/api/debug/playstate) to verify two open questions before any real pause code is written: does SessionInfo.PlayState report correctly for a Live TV tuner session, and does ISessionManager.SendPlaystateCommand get honored by real clients. No user-facing change."
-      },
-      {
-        "version": "0.3.3.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.3.0/jellyfin-plugin-movienight_0.3.3.0.zip",
-        "checksum": "23b4999a15e98c55b794304d9aea55ce",
-        "timestamp": "2026-08-14T15:04:43Z",
-        "changelog": "The live Go Live test also surfaced a design gap, not a bug: guide-based clients (Roku) showed \"no schedule information\" during the broadcast. Root cause - Jellyfin's built-in \"Refresh Guide\" scheduled task only runs once every 24h by default, so without an explicit trigger a real movie-length broadcast would still finish before the guide ever caught up. BroadcastManager now calls IGuideManager.RefreshGuide (fire-and-forget) on every state change - Go Live, natural end, crash, and explicit Stop - so guide-based clients see current info promptly in both directions."
-      },
-      {
-        "version": "0.3.2.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.2.0/jellyfin-plugin-movienight_0.3.2.0.zip",
-        "checksum": "7ccc2fb47c582e1754cadd82fbe2e932",
-        "timestamp": "2026-08-14T14:46:10Z",
-        "changelog": "Second real QSV failure from the same live Go Live test, found right after 0.3.1.0's fix cleared the first one: scale_qsv rejects the round-to-even \"-2\" width value libavfilter's software scale and scale_vaapi accept (\"Size values less than -1 are not acceptable\") - QSV only accepts -1. Changed scale_qsv's width arg from -2 to -1."
-      },
-      {
-        "version": "0.3.1.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.1.0/jellyfin-plugin-movienight_0.3.1.0.zip",
-        "checksum": "b5c7bf581246d91fb46d494b1dc17108",
-        "timestamp": "2026-08-14T14:38:59Z",
-        "changelog": "Fixes a real QSV broadcast failure hit on the first live Go Live test against this NAS's Intel QSV hardware - ffmpeg exited (code 218) with \"Impossible to convert between the formats supported by the filter ... and the filter 'auto_scale_0'\". Root cause: the QSV video-filter chain fed scale_qsv software-decoded frames instead of QSV-resident ones (the VAAPI branch already hwuploads first; QSV didn't). Fixed by adding format=nv12,hwupload=extra_hw_frames=64 before scale_qsv, mirroring VAAPI."
-      },
-      {
-        "version": "0.3.0.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.0.0/jellyfin-plugin-movienight_0.3.0.0.zip",
-        "checksum": "79fe4964be35aae4fa3d408638f57165",
-        "timestamp": "2026-08-14T00:05:42Z",
-        "changelog": "Phase 2 - BroadcastManager (real ffmpeg lifecycle: Go Live/Stop, single-rung 720p H.264/AAC encode, natural-end/crash/stall/disk-guard handling, no auto-restart), FfmpegCommandBuilder (unit-tested per spec 5.3's HW accel matrix - QSV/VAAPI/NVENC/AMF/software), and the empty-vs-populated playlist trick so the channel only appears in the guide while actually live. Phase 1's embedded static test clip is gone - stream/playlist/epg now serve the real broadcast. Minimal dev test harness on the config page (item ID input + Go Live/Stop + status polling) - the real movie picker is Phase 3."
-      },
-      {
-        "version": "0.2.6.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.6.0/jellyfin-plugin-movienight_0.2.6.0.zip",
-        "checksum": "026f91930878530c19a6edf4005d4086",
-        "timestamp": "2026-08-13T22:50:38Z",
-        "changelog": "Root cause found: File.Exists returned false for the extracted hls/master.m3u8 even though it appeared in directory listings - confirmed via a separate host-side read that also got ENOENT on the identical path. A filesystem quirk with zip-extracted plugin files on this NAS, not our code. Fix: embedded the test HLS asset directly into the DLL instead of shipping it as loose files. No more hls/ folder in the release."
-      },
-      {
-        "version": "0.2.5.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.5.0/jellyfin-plugin-movienight_0.2.5.0.zip",
-        "checksum": "547178e0fded82940fd4c6effc24d51d",
-        "timestamp": "2026-08-13T22:25:08Z",
-        "changelog": "Diagnostic build: adds logging of every stream request's fileName/remoteIp/isLoopback/userAgent and which check rejects it, to pin down why ffmpeg's own transcode request 404s against stream/master.m3u8 while an identical browser request gets a clean 403."
-      },
-      {
-        "version": "0.2.4.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.4.0/jellyfin-plugin-movienight_0.2.4.0.zip",
-        "checksum": "60aa523741c7328014f8c8c8a3c864b3",
-        "timestamp": "2026-08-13T22:02:21Z",
-        "changelog": "Fixes a route ambiguity: stream/master.m3u8 and stream/{fileName} both matched the same URL, and the parameterized segment route was winning and 404ing master.m3u8. Confirmed via live playback test - registration worked, channel showed in guide, but tuning failed with this bug. Merged into one dispatching route."
-      },
-      {
-        "version": "0.2.3.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.3.0/jellyfin-plugin-movienight_0.2.3.0.zip",
-        "checksum": "40b063216fe9dba09987a5839dec75a1",
-        "timestamp": "2026-08-13T21:42:40Z",
-        "changelog": "Fixes a remaining startup race: ApplicationStarted fires before Jellyfin's middleware is actually ready, causing HTTP 503 on the loopback registration call. Now polls IServerApplicationHost.CoreStartupHasCompleted first."
-      },
-      {
-        "version": "0.2.2.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.2.0/jellyfin-plugin-movienight_0.2.2.0.zip",
-        "checksum": "6ced8d3f24756c0c82fff7bb77d50827",
-        "timestamp": "2026-08-13T21:30:56Z",
-        "changelog": "Fixes Directory.Build.props hardcoding the assembly's real version to 0.0.0.0 for every build. That's why the dashboard showed Version 0.0.0.0 / Repository Unknown after restarting into 0.2.1.0."
-      },
-      {
-        "version": "0.2.1.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.1.0/jellyfin-plugin-movienight_0.2.1.0.zip",
-        "checksum": "0a5e6192d545e99c2c7e21fc2bdb9d74",
-        "timestamp": "2026-08-13T21:20:42Z",
-        "changelog": "Fixes a startup-ordering bug: tuner/listing registration ran before Kestrel was listening, so it always failed silently and nothing registered. Deferred to ApplicationStarted."
-      },
-      {
-        "version": "0.2.0.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.0.0/jellyfin-plugin-movienight_0.2.0.0.zip",
-        "checksum": "9386e3fffc390d5a46edbe7a1eade1e6",
-        "timestamp": "2026-08-13T21:08:09Z",
-        "changelog": "Phase 1 spike: registers an M3U tuner + XMLTV listings provider pointing at a hand-made static HLS test clip. Tuning the channel plays a 15s synthetic test pattern, not a movie yet (BroadcastManager/ffmpeg is Phase 2)."
-      },
-      {
-        "version": "0.1.0.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.1.0.0/jellyfin-plugin-movienight_0.1.0.0.zip",
-        "checksum": "9e196262179413c86e30e268b3d9e48e",
-        "timestamp": "2026-08-13T16:10:51Z",
-        "changelog": "Phase 0 scaffold. Not functional yet — empty config page only."
-      }
-    ]
-  }
+    {
+        "guid": "8a6e5cf0-30f3-420a-a8ce-e7704d690f94",
+        "name": "Movie Night",
+        "description": "Broadcast a movie from your library as a live, owner-controlled Live TV channel.",
+        "overview": "Broadcast a movie from your library as a live, owner-controlled Live TV channel",
+        "owner": "Thisisjon5",
+        "category": "Live TV",
+        "versions": [
+            {
+                "version": "0.3.20.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.20.0/jellyfin-plugin-movienight_0.3.20.0.zip",
+                "checksum": "658aed145d0816fb2df384a8c6e6b3a2",
+                "timestamp": "2026-08-14T23:53:27Z",
+                "changelog": "Diagnostic instrumentation for the 25fps Go Live stall (25fps sources reliably time out at 30s while 24/29.97fps sources go live in ~10s, root cause unknown): failure messages now include the HEAD of ffmpeg stderr (input probe, stream mapping, first segment opens) instead of only the rolling progress tail, and a new admin debug endpoint GET /MovieNight/api/debug/encoder-dirs snapshots every encoder output directory so segment writing can be observed live during a Starting broadcast."
+            },
+            {
+                "version": "0.3.19.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.19.0/jellyfin-plugin-movienight_0.3.19.0.zip",
+                "checksum": "aa21f78da4e586a5d67d75ce08957966",
+                "timestamp": "2026-08-14T23:35:00Z",
+                "changelog": "Fixes a real double-Go-Live race found live within minutes of shipping v0.3.18.0's self-service UI - the Go Live button gave no in-progress feedback, so a double-click fired two concurrent GoLiveAsync calls that both spawned ffmpeg into the same directory and stomped each other. Fixed at the root (the already-Starting/Live check and the state claim now happen atomically, before the only await) plus button debouncing on the config page as defense-in-depth."
+            },
+            {
+                "version": "0.3.18.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.18.0/jellyfin-plugin-movienight_0.3.18.0.zip",
+                "checksum": "fafd8ce41ad8cb0059d4b186a501580b",
+                "timestamp": "2026-08-14T23:20:00Z",
+                "changelog": "Real self-service controls on the config page: a Pause/Resume toggle button next to Go Live/Stop (promoted from debug-only endpoints to real /MovieNight/api/pause and /resume), a client-sessions panel, and checkboxes to enable/disable the raw-TS and switcher spike test channels (off by default - they no longer show up in the Live TV channel list unless explicitly turned on). No curl commands needed to drive any of this anymore."
+            },
+            {
+                "version": "0.3.17.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.17.0/jellyfin-plugin-movienight_0.3.17.0.zip",
+                "checksum": "11754edfaba7668bfdba66a4d003b77e",
+                "timestamp": "2026-08-14T23:00:00Z",
+                "changelog": "Single-process/multi-input switcher spike: adds a third always-tunable test channel (\"Movie Night (switcher spike)\") - one continuous ffmpeg process with 3 static color/tone inputs, switched live via a streamselect filter controlled over ffmpeg's zmq socket (POST /MovieNight/api/debug/switcher-select?input=N). Tests lossless switching among static sources through Jellyfin's remux hop, and whether this ffmpeg build includes libzmq/zmqsend support at all."
+            },
+            {
+                "version": "0.3.16.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.16.0/jellyfin-plugin-movienight_0.3.16.0.zip",
+                "checksum": "f168a5fb697cc9f114a4766f36b56553",
+                "timestamp": "2026-08-14T22:40:00Z",
+                "changelog": "Raw MPEG-TS tuner spike: adds a second, always-tunable test channel (\"Movie Night (raw TS spike)\") that pipes a synthetic testsrc/tone ffmpeg process's raw MPEG-TS stdout straight to the client, independent of the real broadcast's state machine. Tests whether Jellyfin's M3U tuner accepts and remuxes a raw continuous-stream URL the same way it does hand-rolled HLS."
+            },
+            {
+                "version": "0.3.15.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.15.0/jellyfin-plugin-movienight_0.3.15.0.zip",
+                "checksum": "8b5697ee23dcd596e2391415748d9aaa",
+                "timestamp": "2026-08-14T22:15:00Z",
+                "changelog": "Fixes the dual-writer collision diagnosed right after spike 6's live test (the browser/Roku flip-flop between paused-filler and live-movie content): the movie encoder now writes into its own private directory from Go Live, instead of writing directly into the served HlsDirectory. BroadcastManager owns the served master.m3u8 for the whole broadcast lifetime now, not just after the first pause. Also fixes the stall watchdog and disk guard, which broke as a side effect of HlsDirectory no longer holding segment files."
+            },
+            {
+                "version": "0.3.14.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.14.0/jellyfin-plugin-movienight_0.3.14.0.zip",
+                "checksum": "0b06a0a3d7472cfaa83576bb7a2919d1",
+                "timestamp": "2026-08-14T20:54:41Z",
+                "changelog": "Spike 6: reworks the splice mechanism into a true pointer model - each encoder writes under its own distinct filename prefix, in its own directory, and the controller resolves a requested segment to the right directory. No file copying anywhere, movie encoder left running through the whole pause and only torn down synchronously when resume actually needs to replace it."
+            },
+            {
+                "version": "0.3.13.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.13.0/jellyfin-plugin-movienight_0.3.13.0.zip",
+                "checksum": "1628e78dfe2c188a7e0fa56dc4c87bed",
+                "timestamp": "2026-08-14T20:35:12Z",
+                "changelog": "Generalizes the video-switcher principle to both transitions: resume now runs the new movie encoder for an extra 30s buffer before cutting over, and pause keeps the old movie encoder alive for a 60s grace window after switching to filler instead of killing it immediately. Never cut to a source before it's rolling, never tear down the old one the instant you cut away."
+            },
+            {
+                "version": "0.3.12.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.12.0/jellyfin-plugin-movienight_0.3.12.0.zip",
+                "checksum": "62b81a4b8cdd563c38266419b7651fa2",
+                "timestamp": "2026-08-14T20:27:58Z",
+                "changelog": "Fixes the actual cause of resume never playing: Resume() stopped the filler feed before the new movie encoder was ready, stalling the served playlist during the whole warm-up window. We're building a video switcher, and a switcher never cuts to a source before it's rolling - the filler now stays live the entire time the movie encoder warms up in the background."
+            },
+            {
+                "version": "0.3.11.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.11.0/jellyfin-plugin-movienight_0.3.11.0.zip",
+                "checksum": "11239e8abf28a9b560938a3eefdabd92",
+                "timestamp": "2026-08-14T20:01:13Z",
+                "changelog": "A/B live-tested 0.3.10.0 against 0.3.9.0 on identical conditions - confirmed 0.3.10.0's trigger change regressed the pause path even though it was aimed at fixing resume. Restores Pause() to 0.3.9.0's proven pattern; Resume() keeps 0.3.10.0's fix."
+            },
+            {
+                "version": "0.3.10.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.10.0/jellyfin-plugin-movienight_0.3.10.0.zip",
+                "checksum": "10af560c99360e875bfab86999ac8f87",
+                "timestamp": "2026-08-14T19:08:56Z",
+                "changelog": "Fixes the real race behind the resume-freeze bug: Pause()/Resume() had two separate triggers for the splice-copy timer that could run concurrently and collide on the same segment filename. Now there's one trigger plus a re-entrancy guard. Also bumps the pause rewind from 15s to 60s to match real round-trip latency. NOTE: this version's Pause()-side trigger change was later found (0.3.11.0) to regress the pause path - do not use standalone."
+            },
+            {
+                "version": "0.3.9.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.9.0/jellyfin-plugin-movienight_0.3.9.0.zip",
+                "checksum": "03e48c466766df8ced396e1ed393597a",
+                "timestamp": "2026-08-14T18:50:23Z",
+                "changelog": "Fixes resume-crash bug in 0.3.8.0: Resume() now restarts the periodic splice-copy timer, same as Pause() does, so the served playlist keeps updating after resume instead of stalling out."
+            },
+            {
+                "version": "0.3.8.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.8.0/jellyfin-plugin-movienight_0.3.8.0.zip",
+                "checksum": "799f3209c37a84c2a53776e5f5d6b1a5",
+                "timestamp": "2026-08-14T18:41:20Z",
+                "changelog": "Fixes spike 5's live test failure: filler encoder now starts continuously right after Go Live instead of on-demand at pause time, closing the gap that made Jellyfin's downstream remux treat the paused stream as ended."
+            },
+            {
+                "version": "0.3.7.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.7.0/jellyfin-plugin-movienight_0.3.7.0.zip",
+                "checksum": "327a2583504412b689bbf5bc128cc5c9",
+                "timestamp": "2026-08-14T18:29:11Z",
+                "changelog": "Spike 5 for universal pause: replaces spike 4's SIGSTOP approach (mechanically clean but desynced across clients due to Jellyfin's own remux hop) with the filler-channel splice mechanism ruled in planning/DECISIONS.md - a background filler encoder spliced into the served playlist with EXT-X-DISCONTINUITY on pause, movie encoder respawned and spliced back in on resume."
+            },
+            {
+                "version": "0.3.6.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.6.0/jellyfin-plugin-movienight_0.3.6.0.zip",
+                "checksum": "0c1773b7d6326b8ff3919da4005f21b6",
+                "timestamp": "2026-08-14T17:29:21Z",
+                "changelog": "Spike 4 for universal pause: SIGSTOP/SIGCONT on the same running ffmpeg process instead of killing and respawning a synthetic frozen source (spike 3 broke - stopped writing segments, tripped the stall watchdog). Also fixes missing stderr capture on the stall-watchdog failure path."
+            },
+            {
+                "version": "0.3.5.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.5.0/jellyfin-plugin-movienight_0.3.5.0.zip",
+                "checksum": "b40b4b5ed26a34ef7ff67898346ea4c8",
+                "timestamp": "2026-08-14T17:17:35Z",
+                "changelog": "Spike 3 for universal pause: freeze/unfreeze the shared encoder instead of pushing a playstate command to each client (spike 2 found that doesn't work). Adds BroadcastManager.FreezeAsync/UnfreezeAsync + debug endpoints /MovieNight/api/debug/freeze and /unfreeze. Debug-only, not the real feature."
+            },
+            {
+                "version": "0.3.4.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.4.0/jellyfin-plugin-movienight_0.3.4.0.zip",
+                "checksum": "0e7b8737d6b5868dd619acb536b9a76f",
+                "timestamp": "2026-08-14T16:23:59Z",
+                "changelog": "Spike build for the universal-pause architecture decision (see planning/DECISIONS.md) - adds temporary admin-only debug endpoints (/MovieNight/api/debug/sessions, /MovieNight/api/debug/playstate) to verify two open questions before any real pause code is written: does SessionInfo.PlayState report correctly for a Live TV tuner session, and does ISessionManager.SendPlaystateCommand get honored by real clients. No user-facing change."
+            },
+            {
+                "version": "0.3.3.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.3.0/jellyfin-plugin-movienight_0.3.3.0.zip",
+                "checksum": "23b4999a15e98c55b794304d9aea55ce",
+                "timestamp": "2026-08-14T15:04:43Z",
+                "changelog": "The live Go Live test also surfaced a design gap, not a bug: guide-based clients (Roku) showed \"no schedule information\" during the broadcast. Root cause - Jellyfin's built-in \"Refresh Guide\" scheduled task only runs once every 24h by default, so without an explicit trigger a real movie-length broadcast would still finish before the guide ever caught up. BroadcastManager now calls IGuideManager.RefreshGuide (fire-and-forget) on every state change - Go Live, natural end, crash, and explicit Stop - so guide-based clients see current info promptly in both directions."
+            },
+            {
+                "version": "0.3.2.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.2.0/jellyfin-plugin-movienight_0.3.2.0.zip",
+                "checksum": "7ccc2fb47c582e1754cadd82fbe2e932",
+                "timestamp": "2026-08-14T14:46:10Z",
+                "changelog": "Second real QSV failure from the same live Go Live test, found right after 0.3.1.0's fix cleared the first one: scale_qsv rejects the round-to-even \"-2\" width value libavfilter's software scale and scale_vaapi accept (\"Size values less than -1 are not acceptable\") - QSV only accepts -1. Changed scale_qsv's width arg from -2 to -1."
+            },
+            {
+                "version": "0.3.1.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.1.0/jellyfin-plugin-movienight_0.3.1.0.zip",
+                "checksum": "b5c7bf581246d91fb46d494b1dc17108",
+                "timestamp": "2026-08-14T14:38:59Z",
+                "changelog": "Fixes a real QSV broadcast failure hit on the first live Go Live test against this NAS's Intel QSV hardware - ffmpeg exited (code 218) with \"Impossible to convert between the formats supported by the filter ... and the filter 'auto_scale_0'\". Root cause: the QSV video-filter chain fed scale_qsv software-decoded frames instead of QSV-resident ones (the VAAPI branch already hwuploads first; QSV didn't). Fixed by adding format=nv12,hwupload=extra_hw_frames=64 before scale_qsv, mirroring VAAPI."
+            },
+            {
+                "version": "0.3.0.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.0.0/jellyfin-plugin-movienight_0.3.0.0.zip",
+                "checksum": "79fe4964be35aae4fa3d408638f57165",
+                "timestamp": "2026-08-14T00:05:42Z",
+                "changelog": "Phase 2 - BroadcastManager (real ffmpeg lifecycle: Go Live/Stop, single-rung 720p H.264/AAC encode, natural-end/crash/stall/disk-guard handling, no auto-restart), FfmpegCommandBuilder (unit-tested per spec 5.3's HW accel matrix - QSV/VAAPI/NVENC/AMF/software), and the empty-vs-populated playlist trick so the channel only appears in the guide while actually live. Phase 1's embedded static test clip is gone - stream/playlist/epg now serve the real broadcast. Minimal dev test harness on the config page (item ID input + Go Live/Stop + status polling) - the real movie picker is Phase 3."
+            },
+            {
+                "version": "0.2.6.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.6.0/jellyfin-plugin-movienight_0.2.6.0.zip",
+                "checksum": "026f91930878530c19a6edf4005d4086",
+                "timestamp": "2026-08-13T22:50:38Z",
+                "changelog": "Root cause found: File.Exists returned false for the extracted hls/master.m3u8 even though it appeared in directory listings - confirmed via a separate host-side read that also got ENOENT on the identical path. A filesystem quirk with zip-extracted plugin files on this NAS, not our code. Fix: embedded the test HLS asset directly into the DLL instead of shipping it as loose files. No more hls/ folder in the release."
+            },
+            {
+                "version": "0.2.5.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.5.0/jellyfin-plugin-movienight_0.2.5.0.zip",
+                "checksum": "547178e0fded82940fd4c6effc24d51d",
+                "timestamp": "2026-08-13T22:25:08Z",
+                "changelog": "Diagnostic build: adds logging of every stream request's fileName/remoteIp/isLoopback/userAgent and which check rejects it, to pin down why ffmpeg's own transcode request 404s against stream/master.m3u8 while an identical browser request gets a clean 403."
+            },
+            {
+                "version": "0.2.4.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.4.0/jellyfin-plugin-movienight_0.2.4.0.zip",
+                "checksum": "60aa523741c7328014f8c8c8a3c864b3",
+                "timestamp": "2026-08-13T22:02:21Z",
+                "changelog": "Fixes a route ambiguity: stream/master.m3u8 and stream/{fileName} both matched the same URL, and the parameterized segment route was winning and 404ing master.m3u8. Confirmed via live playback test - registration worked, channel showed in guide, but tuning failed with this bug. Merged into one dispatching route."
+            },
+            {
+                "version": "0.2.3.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.3.0/jellyfin-plugin-movienight_0.2.3.0.zip",
+                "checksum": "40b063216fe9dba09987a5839dec75a1",
+                "timestamp": "2026-08-13T21:42:40Z",
+                "changelog": "Fixes a remaining startup race: ApplicationStarted fires before Jellyfin's middleware is actually ready, causing HTTP 503 on the loopback registration call. Now polls IServerApplicationHost.CoreStartupHasCompleted first."
+            },
+            {
+                "version": "0.2.2.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.2.0/jellyfin-plugin-movienight_0.2.2.0.zip",
+                "checksum": "6ced8d3f24756c0c82fff7bb77d50827",
+                "timestamp": "2026-08-13T21:30:56Z",
+                "changelog": "Fixes Directory.Build.props hardcoding the assembly's real version to 0.0.0.0 for every build. That's why the dashboard showed Version 0.0.0.0 / Repository Unknown after restarting into 0.2.1.0."
+            },
+            {
+                "version": "0.2.1.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.1.0/jellyfin-plugin-movienight_0.2.1.0.zip",
+                "checksum": "0a5e6192d545e99c2c7e21fc2bdb9d74",
+                "timestamp": "2026-08-13T21:20:42Z",
+                "changelog": "Fixes a startup-ordering bug: tuner/listing registration ran before Kestrel was listening, so it always failed silently and nothing registered. Deferred to ApplicationStarted."
+            },
+            {
+                "version": "0.2.0.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.2.0.0/jellyfin-plugin-movienight_0.2.0.0.zip",
+                "checksum": "9386e3fffc390d5a46edbe7a1eade1e6",
+                "timestamp": "2026-08-13T21:08:09Z",
+                "changelog": "Phase 1 spike: registers an M3U tuner + XMLTV listings provider pointing at a hand-made static HLS test clip. Tuning the channel plays a 15s synthetic test pattern, not a movie yet (BroadcastManager/ffmpeg is Phase 2)."
+            },
+            {
+                "version": "0.1.0.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.1.0.0/jellyfin-plugin-movienight_0.1.0.0.zip",
+                "checksum": "9e196262179413c86e30e268b3d9e48e",
+                "timestamp": "2026-08-13T16:10:51Z",
+                "changelog": "Phase 0 scaffold. Not functional yet \u00e2\u20ac\u201d empty config page only."
+            }
+        ]
+    }
 ]

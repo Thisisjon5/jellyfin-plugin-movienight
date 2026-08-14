@@ -1464,6 +1464,47 @@ public sealed class BroadcastManager : IDisposable
     public void RefreshChannelsGuide() => TriggerGuideRefresh();
 
     /// <summary>
+    /// Diagnostic snapshot of every encoder output directory (added 2026-08-14 for the 25fps Go
+    /// Live stall): the NAS container's /tmp is unreachable from outside, so this is the only way
+    /// to see whether ffmpeg is actually writing segments while a broadcast is Starting. Read via
+    /// the debug controller, safe to call at any time.
+    /// </summary>
+    /// <returns>Per-directory existence plus file names, sizes, and last-write times.</returns>
+    public object DescribeOutputDirectories()
+    {
+        object Describe(string dir)
+        {
+            try
+            {
+                if (!Directory.Exists(dir))
+                {
+                    return new { Path = dir, Exists = false, Files = Array.Empty<object>() };
+                }
+
+                var files = Directory.EnumerateFiles(dir)
+                    .Select(f => new FileInfo(f))
+                    .OrderBy(f => f.Name, StringComparer.Ordinal)
+                    .Select(f => (object)new { f.Name, f.Length, LastWriteUtc = f.LastWriteTimeUtc.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) })
+                    .ToArray();
+                return new { Path = dir, Exists = true, Files = files };
+            }
+            catch (Exception ex)
+            {
+                return new { Path = dir, Error = ex.Message };
+            }
+        }
+
+        return new
+        {
+            State = GetStatus().State.ToString(),
+            Hls = Describe(HlsDirectory),
+            Movie = Describe(MovieDirectory),
+            Filler = Describe(FillerDirectory),
+            Resume = Describe(ResumedMovieDirectory),
+        };
+    }
+
+    /// <summary>
     /// Fires an immediate guide refresh in the background, without blocking the caller - guide-based
     /// clients (e.g. Roku) read the channel's now-playing info from the guide, not the M3U/EPG
     /// endpoints directly, and the built-in "Refresh Guide" task only runs once every 24h by
@@ -1559,23 +1600,37 @@ public sealed class BroadcastManager : IDisposable
     private static extern int NativeKill(int pid, int signal);
 
     /// <summary>
-    /// A small fixed-size ring buffer of the most recent ffmpeg stderr lines, for surfacing in
-    /// failure messages (spec §5.4/§7's "Last failure panel").
+    /// Keeps the FIRST lines of ffmpeg stderr (input probe, stream mapping, filter init, first
+    /// segment opens - where startup failures actually explain themselves) plus a rolling tail of
+    /// the most recent lines, for surfacing in failure messages (spec §5.4/§7's "Last failure
+    /// panel"). Head capture added 2026-08-14 while diagnosing the 25fps Go Live stall: a
+    /// tail-only buffer showed 40 healthy progress lines and nothing else, which made three
+    /// separate live failures undiagnosable from their own error messages.
     /// </summary>
     private sealed class StderrTailBuffer
     {
-        private const int MaxLines = 40;
+        private const int MaxHeadLines = 60;
+        private const int MaxTailLines = 40;
         private readonly object _bufferLock = new();
-        private readonly Queue<string> _lines = new();
+        private readonly List<string> _head = new();
+        private readonly Queue<string> _tail = new();
+        private int _totalLines;
 
         public void Add(string line)
         {
             lock (_bufferLock)
             {
-                _lines.Enqueue(line);
-                while (_lines.Count > MaxLines)
+                _totalLines++;
+                if (_head.Count < MaxHeadLines)
                 {
-                    _lines.Dequeue();
+                    _head.Add(line);
+                    return;
+                }
+
+                _tail.Enqueue(line);
+                while (_tail.Count > MaxTailLines)
+                {
+                    _tail.Dequeue();
                 }
             }
         }
@@ -1584,7 +1639,14 @@ public sealed class BroadcastManager : IDisposable
         {
             lock (_bufferLock)
             {
-                return string.Join('\n', _lines);
+                if (_tail.Count == 0)
+                {
+                    return string.Join('\n', _head);
+                }
+
+                var omitted = _totalLines - _head.Count - _tail.Count;
+                var middle = omitted > 0 ? $"\n... [{omitted} lines omitted] ...\n" : "\n";
+                return string.Join('\n', _head) + middle + string.Join('\n', _tail);
             }
         }
     }
