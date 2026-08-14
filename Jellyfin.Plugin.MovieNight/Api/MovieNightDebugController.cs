@@ -23,14 +23,42 @@ namespace Jellyfin.Plugin.MovieNight.Api;
 public class MovieNightDebugController : ControllerBase
 {
     private readonly ISessionManager _sessionManager;
+    private readonly BroadcastManager _broadcastManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightDebugController"/> class.
     /// </summary>
     /// <param name="sessionManager">Used to read session play state and push playstate commands.</param>
-    public MovieNightDebugController(ISessionManager sessionManager)
+    /// <param name="broadcastManager">Used to swap the running encoder for the freeze/unfreeze spike.</param>
+    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager)
     {
         _sessionManager = sessionManager;
+        _broadcastManager = broadcastManager;
+    }
+
+    /// <summary>
+    /// Spike 3: swaps the running encoder for a frozen-frame source, without touching state/HLS
+    /// directory/guide, to test whether an already-tuned client survives the swap transparently -
+    /// no client command push, just the shared live stream changing what it's carrying.
+    /// </summary>
+    /// <returns>200 if the frozen encoder started, 409 if the broadcast isn't Live.</returns>
+    [HttpPost("freeze")]
+    public async Task<ActionResult> Freeze()
+    {
+        var ok = await _broadcastManager.FreezeAsync().ConfigureAwait(false);
+        return ok ? Ok() : Conflict();
+    }
+
+    /// <summary>
+    /// Spike 3 counterpart: kills the frozen encode and respawns the real broadcast (from the
+    /// beginning of the file - not the paused position, out of scope for this spike).
+    /// </summary>
+    /// <returns>200 if the real encoder restarted, 409 if the broadcast isn't Live.</returns>
+    [HttpPost("unfreeze")]
+    public async Task<ActionResult> Unfreeze()
+    {
+        var ok = await _broadcastManager.UnfreezeAsync().ConfigureAwait(false);
+        return ok ? Ok() : Conflict();
     }
 
     /// <summary>

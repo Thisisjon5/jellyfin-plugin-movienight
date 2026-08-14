@@ -47,6 +47,10 @@ public sealed class BroadcastManager : IDisposable
     private DateTime? _startedAtUtc;
     private long? _runTimeTicks;
     private string? _lastFailureReason;
+    private string? _currentItemPath;
+    private HardwareAccel _currentAccel;
+    private string? _currentVaapiDevice;
+    private bool _suppressExitHandling;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BroadcastManager"/> class.
@@ -152,6 +156,9 @@ public sealed class BroadcastManager : IDisposable
         var encodingOptions = _configurationManager.GetEncodingOptions();
         var accel = MapHardwareAccel(encodingOptions.HardwareAccelerationType);
         var args = FfmpegCommandBuilder.Build(item.Path, HlsDirectory, accel, encodingOptions.VaapiDevice);
+        _currentItemPath = item.Path;
+        _currentAccel = accel;
+        _currentVaapiDevice = encodingOptions.VaapiDevice;
 
         var startInfo = new ProcessStartInfo
         {
@@ -287,6 +294,168 @@ public sealed class BroadcastManager : IDisposable
         TriggerGuideRefresh();
     }
 
+    /// <summary>
+    /// SPIKE (2026-08-14, see planning/DECISIONS.md universal-pause entry): swaps the running
+    /// encoder for a synthetic frozen-frame source, without touching state/HLS directory/guide -
+    /// testing whether an already-tuned client survives an encoder swap transparently (no client
+    /// command push). Writes to the same master.m3u8/segment_%03d.ts names so an in-progress
+    /// client's playlist polling is undisturbed. Not resume-position-aware; not the real feature.
+    /// </summary>
+    /// <returns><c>true</c> if the frozen encoder started.</returns>
+    public async Task<bool> FreezeAsync()
+    {
+        lock (_lock)
+        {
+            if (_state != BroadcastState.Live)
+            {
+                return false;
+            }
+        }
+
+        await KillCurrentProcessGracefullyAsync().ConfigureAwait(false);
+
+        var args = new List<string>
+        {
+            "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+            "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+            "-force_key_frames", "expr:gte(t,n_forced*2)",
+            "-f", "hls",
+            "-hls_time", "4",
+            "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+independent_segments",
+            "-hls_segment_filename", Path.Combine(HlsDirectory, "segment_%03d.ts"),
+            Path.Combine(HlsDirectory, "master.m3u8"),
+        };
+
+        return SpawnSpikeProcess(args);
+    }
+
+    /// <summary>
+    /// SPIKE counterpart to <see cref="FreezeAsync"/>: kills the frozen encode and respawns the
+    /// real broadcast from the beginning of the file - exact resume position is out of scope for
+    /// this spike, which only tests whether the swap itself is transparent to an already-tuned
+    /// client.
+    /// </summary>
+    /// <returns><c>true</c> if the real encoder restarted.</returns>
+    public async Task<bool> UnfreezeAsync()
+    {
+        string? itemPath;
+        HardwareAccel accel;
+        string? vaapiDevice;
+        lock (_lock)
+        {
+            if (_state != BroadcastState.Live || _currentItemPath is null)
+            {
+                return false;
+            }
+
+            itemPath = _currentItemPath;
+            accel = _currentAccel;
+            vaapiDevice = _currentVaapiDevice;
+        }
+
+        await KillCurrentProcessGracefullyAsync().ConfigureAwait(false);
+
+        var args = FfmpegCommandBuilder.Build(itemPath, HlsDirectory, accel, vaapiDevice);
+        return SpawnSpikeProcess(args);
+    }
+
+    /// <summary>
+    /// Kills the current process (SIGTERM, grace, SIGKILL) without touching state, the HLS
+    /// directory, or the guide - the piece <see cref="StopAsync"/> does NOT share, because Stop
+    /// intentionally resets all of that and this must not. Marks the exit as intentional first so
+    /// <see cref="OnProcessExited"/> does not treat the swap as a crash or natural end.
+    /// </summary>
+    private async Task KillCurrentProcessGracefullyAsync()
+    {
+        Process? process;
+        lock (_lock)
+        {
+            _suppressExitHandling = true;
+            process = _process;
+        }
+
+        if (process is not null && !process.HasExited)
+        {
+            if (!TrySendSigterm(process))
+            {
+                lock (_lock)
+                {
+                    KillProcessUnlocked();
+                }
+            }
+            else
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    lock (_lock)
+                    {
+                        KillProcessUnlocked();
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// SPIKE process-spawn helper shared by <see cref="FreezeAsync"/>/<see cref="UnfreezeAsync"/>.
+    /// Deliberately separate from GoLiveAsync's own spawn code rather than a shared refactor - this
+    /// is throwaway spike code and GoLiveAsync's path is already hardened by real production use.
+    /// </summary>
+    private bool SpawnSpikeProcess(IReadOnlyList<string> args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        var stderrTail = new StderrTailBuffer();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                stderrTail.Add(e.Data);
+            }
+        };
+        process.Exited += (_, _) => OnProcessExited(process, stderrTail);
+
+        try
+        {
+            process.Start();
+            process.BeginErrorReadLine();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: spike freeze/unfreeze failed to start ffmpeg");
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _process = process;
+            _stderrTail = stderrTail;
+            _suppressExitHandling = false;
+        }
+
+        return true;
+    }
+
     private static HardwareAccel MapHardwareAccel(MediaBrowser.Model.Entities.HardwareAccelerationType type) =>
         type switch
         {
@@ -375,6 +544,13 @@ public sealed class BroadcastManager : IDisposable
     {
         lock (_lock)
         {
+            if (_suppressExitHandling)
+            {
+                // A spike Freeze/Unfreeze swap killed this process on purpose; it is not the
+                // broadcast ending. See FreezeAsync/UnfreezeAsync.
+                return;
+            }
+
             if (!ReferenceEquals(_process, process))
             {
                 // Already stopped/replaced by StopAsync or a new GoLiveAsync; nothing to do.
