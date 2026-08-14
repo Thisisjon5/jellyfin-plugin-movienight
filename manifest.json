@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.10.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.10.0/jellyfin-plugin-movienight_0.3.10.0.zip",
+        "checksum": "10af560c99360e875bfab86999ac8f87",
+        "timestamp": "2026-08-14T19:08:56Z",
+        "changelog": "Fixes the real race behind the resume-freeze bug: Pause()/Resume() had two separate triggers for the splice-copy timer that could run concurrently and collide on the same segment filename. Now there's one trigger plus a re-entrancy guard. Also bumps the pause rewind from 15s to 60s to match real round-trip latency."
+      },
+      {
         "version": "0.3.9.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.9.0/jellyfin-plugin-movienight_0.3.9.0.zip",
