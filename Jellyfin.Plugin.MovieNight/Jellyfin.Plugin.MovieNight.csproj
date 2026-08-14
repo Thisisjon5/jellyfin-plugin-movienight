@@ -30,30 +30,4 @@
     <EmbeddedResource Include="Configuration\configPage.html" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!--
-      Phase 1 spike test HLS asset, embedded directly into the DLL rather than shipped as loose
-      files alongside it: on the target NAS, files extracted from the plugin zip appeared in
-      directory listings but genuinely could not be opened (File.Exists returned false, matching
-      an ENOENT from a separate host-side read) - a filesystem quirk with this specific
-      environment's zip extraction, not our code. Embedding sidesteps it entirely.
-    -->
-    <None Remove="Resources\Hls\*" />
-    <EmbeddedResource Include="Resources\Hls\master.m3u8">
-      <LogicalName>Jellyfin.Plugin.MovieNight.Hls.master.m3u8</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Resources\Hls\segment_000.ts">
-      <LogicalName>Jellyfin.Plugin.MovieNight.Hls.segment_000.ts</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Resources\Hls\segment_001.ts">
-      <LogicalName>Jellyfin.Plugin.MovieNight.Hls.segment_001.ts</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Resources\Hls\segment_002.ts">
-      <LogicalName>Jellyfin.Plugin.MovieNight.Hls.segment_002.ts</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Resources\Hls\segment_003.ts">
-      <LogicalName>Jellyfin.Plugin.MovieNight.Hls.segment_003.ts</LogicalName>
-    </EmbeddedResource>
-  </ItemGroup>
-
 </Project>

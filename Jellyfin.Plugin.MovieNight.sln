@@ -1,6 +1,8 @@
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-#
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Jellyfin.Plugin.MovieNight", "Jellyfin.Plugin.MovieNight\Jellyfin.Plugin.MovieNight.csproj", "{D921B930-CF91-406F-ACBC-08914DCD0D34}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Jellyfin.Plugin.MovieNight.Tests", "Jellyfin.Plugin.MovieNight.Tests\Jellyfin.Plugin.MovieNight.Tests.csproj", "{81E6A519-F790-49BB-AE69-F68C693F0C66}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -12,7 +14,7 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-        {D921B930-CF91-406F-ACBC-08914DCD0D34}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Debug|x64.ActiveCfg = Debug|Any CPU
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Debug|x64.Build.0 = Debug|Any CPU
@@ -24,5 +26,20 @@ Global
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Release|x64.Build.0 = Release|Any CPU
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Release|x86.ActiveCfg = Release|Any CPU
 		{D921B930-CF91-406F-ACBC-08914DCD0D34}.Release|x86.Build.0 = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|x64.Build.0 = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Debug|x86.Build.0 = Debug|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|Any CPU.Build.0 = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|x64.ActiveCfg = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|x64.Build.0 = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|x86.ActiveCfg = Release|Any CPU
+		{81E6A519-F790-49BB-AE69-F68C693F0C66}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal

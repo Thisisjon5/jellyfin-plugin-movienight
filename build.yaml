@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.2.6.0"
+version: "0.3.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,47 +14,19 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
-  0.2.6.0: Root cause found via the v0.2.5.0 diagnostic logging: File.Exists
-  returned false for hls/master.m3u8 even though it appeared in directory
-  listings - confirmed via a separate host-side read attempt on the
-  identical path, which got a genuine ENOENT. A filesystem quirk with
-  zip-extracted plugin files on this NAS, not our code. Fix: stopped
-  shipping the test HLS asset as loose files entirely - now embedded
-  directly into the DLL as embedded resources (same pattern as
-  configPage.html), served via Assembly.GetManifestResourceStream. No more
-  hls/ folder in the release zip.
-  0.2.5.0: DIAGNOSTIC BUILD. v0.2.4.0's route fix confirmed itself working
-  for external requests (a direct browser hit on stream/master.m3u8 got a
-  clean 403 Forbid from our own auth handler), but ffmpeg's own transcode
-  attempt still got a genuine fresh 404 (confirmed via the actual FFmpeg
-  transcode log file, not stale stderr) - same URL, different outcome
-  depending on caller, which none of the code explains on inspection alone.
-  Added logging of every stream request's fileName/remoteIp/isLoopback/
-  userAgent and exactly which check rejects it, to get a definitive answer
-  instead of guessing further.
-  0.2.4.0: Fix route ambiguity - stream/master.m3u8 (literal) and
-  stream/{fileName} (segments) both matched the same URL shape, and the
-  parameterized route was winning, 404ing "master.m3u8" against the segment
-  regex before the literal route ever got a chance. Confirmed via live
-  playback test: registration succeeded and the channel showed in the Live
-  TV guide, but tuning it failed - ffmpeg's own probe hit 404 on our
-  master.m3u8 even though the file existed on disk exactly where expected.
-  Merged both routes into one dispatching action.
-  0.2.3.0: Fix remaining startup race - ApplicationStarted fires before
-  Jellyfin's own middleware is ready (still returns 503 for a window while
-  "Running startup tasks" executes). Now polls
-  IServerApplicationHost.CoreStartupHasCompleted before registering.
-  0.2.2.0: Fix Directory.Build.props - it hardcoded the assembly's actual
-  Version/AssemblyVersion/FileVersion to 0.0.0.0 for every build (an
-  unbumped template placeholder), so once Jellyfin loaded the plugin
-  post-restart it read the real assembly version (0.0.0.0) instead of the
-  catalog metadata and showed "Repository: Unknown". Now kept in sync with
-  this file's version on every release.
-  0.2.1.0: Fix startup-ordering bug - tuner/listing registration ran before
-  Kestrel was listening, so SaveTunerHost's loopback validation fetch always
-  failed with connection refused and nothing ever registered. Now deferred
-  to IHostApplicationLifetime.ApplicationStarted.
-  0.2.0.0: Phase 1 spike - registers an M3U tuner + XMLTV listings provider
-  pointing at a hand-made static HLS test asset. Still no real broadcast
-  logic (ffmpeg/BroadcastManager is Phase 2).
+  0.3.0.0: Phase 2 - BroadcastManager (real ffmpeg lifecycle: Go Live/Stop,
+  single-rung 720p H.264/AAC encode, natural-end/crash/stall/disk-guard
+  handling, no auto-restart), FfmpegCommandBuilder (unit-tested per §5.3's
+  HW accel matrix - QSV/VAAPI/NVENC/AMF/software), and the empty-vs-populated
+  playlist trick so the channel only appears in the guide while actually
+  live. Phase 1's embedded static test clip is gone - stream/playlist/epg
+  now serve the real broadcast. Minimal dev test harness on the config page
+  (item ID input + Go Live/Stop + status polling) - the real movie picker
+  is Phase 3.
+  0.2.x: Phase 1 - M3U tuner + XMLTV listings provider registration
+  (ITunerHostManager/IListingsManager, in-process, no REST). Five point
+  releases to get there: two startup-ordering races, a route-ambiguity bug,
+  a hardcoded-0.0.0.0 assembly version, and a NAS filesystem quirk where
+  zip-extracted plugin files couldn't actually be opened at runtime (fixed
+  by embedding the test asset into the DLL). Full history in repo CLAUDE.md.
   0.1.0.0: Phase 0 scaffold.
