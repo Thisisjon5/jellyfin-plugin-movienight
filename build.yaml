@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.7.0"
+version: "0.3.8.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,14 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.8.0: Fixes spike 5's live test failure - the filler encoder now starts
+  running continuously right after Go Live instead of on-demand at pause
+  time. The on-demand version left a gap of a few seconds between killing
+  the movie encoder and the filler being ready, during which Jellyfin's own
+  downstream remux (which every Live TV client goes through) treated the
+  stalled playlist as the stream ending and quit, kicking both a real
+  browser and Roku back to the channel list on the first live test. Pause
+  now splices to whatever the already-warm filler has produced - zero gap.
   0.3.7.0: Spike 5 for universal pause - replaces spike 4's SIGSTOP approach
   (mechanically clean but desynced across clients due to Jellyfin's own
   remux hop) with the filler-channel splice mechanism ruled in

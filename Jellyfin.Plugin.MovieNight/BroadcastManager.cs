@@ -50,6 +50,7 @@ public sealed class BroadcastManager : IDisposable
     private readonly List<(string FileName, double Duration, bool DiscontinuityBefore)> _servedSegments = new();
 
     private Process? _process;
+    private Process? _fillerProcess;
     private Timer? _watchdogTimer;
     private StderrTailBuffer? _stderrTail;
     private BroadcastState _state = BroadcastState.Idle;
@@ -254,6 +255,7 @@ public sealed class BroadcastManager : IDisposable
                 _logger.LogInformation("Movie Night: broadcast live, playing {Path}", item.Path);
                 StartWatchdog();
                 TriggerGuideRefresh();
+                StartFillerEncoderInBackground();
                 return true;
             }
 
@@ -285,9 +287,11 @@ public sealed class BroadcastManager : IDisposable
     public async Task StopAsync()
     {
         Process? process;
+        Process? fillerProcess;
         lock (_lock)
         {
             process = _process;
+            fillerProcess = _fillerProcess;
         }
 
         if (process is not null && !process.HasExited)
@@ -312,6 +316,8 @@ public sealed class BroadcastManager : IDisposable
             }
         }
 
+        await KillFillerAsync(fillerProcess).ConfigureAwait(false);
+
         StopWatchdog();
         CleanHlsDirectory();
 
@@ -325,6 +331,7 @@ public sealed class BroadcastManager : IDisposable
             _process = null;
             _stderrTail = null;
             _currentItemPath = null;
+            _fillerProcess = null;
             StopSpliceTimerUnlocked();
             _isPaused = false;
             _pausedAtSeconds = 0;
@@ -337,6 +344,40 @@ public sealed class BroadcastManager : IDisposable
         }
 
         TriggerGuideRefresh();
+    }
+
+    private async Task KillFillerAsync(Process? fillerProcess)
+    {
+        if (fillerProcess is null || fillerProcess.HasExited)
+        {
+            return;
+        }
+
+        if (TrySendSigterm(fillerProcess))
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(StopGraceSeconds));
+            try
+            {
+                await fillerProcess.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Falls through to the hard kill below.
+            }
+        }
+
+        try
+        {
+            if (!fillerProcess.HasExited)
+            {
+                fillerProcess.Kill();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited between the check and Kill(); nothing to do.
+        }
     }
 
     /// <summary>
@@ -366,22 +407,21 @@ public sealed class BroadcastManager : IDisposable
             return false;
         }
 
+        // The filler has been running continuously since Go Live (StartFillerEncoderInBackground) -
+        // find whatever it's already produced so the splice starts instantly, zero cold start. The
+        // gap of spawning-and-waiting-for-a-filler-on-demand is what broke the first live test
+        // tonight: Jellyfin's own downstream remux treats any gap in the served playlist as the
+        // stream ending and quits, kicking clients back to the channel list.
+        var fillerCursor = GetLatestFillerSegmentIndex();
+        if (fillerCursor < 0)
+        {
+            _logger.LogError("Movie Night: spike 5 - background filler has no segments ready yet, can't splice");
+            return false;
+        }
+
         var elapsedSeconds = startedAt is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0;
 
         await KillActiveEncoderForSpliceAsync().ConfigureAwait(false);
-
-        CleanDirectory(FillerDirectory);
-        if (!SpawnSpliceSource(BuildFillerArgs(FillerDirectory)))
-        {
-            _logger.LogError("Movie Night: spike 5 - failed to start filler encoder");
-            return false;
-        }
-
-        if (!await WaitForFirstSegmentAsync(FillerDirectory, "filler_").ConfigureAwait(false))
-        {
-            _logger.LogError("Movie Night: spike 5 - filler encoder did not produce a segment in time");
-            return false;
-        }
 
         lock (_lock)
         {
@@ -394,15 +434,38 @@ public sealed class BroadcastManager : IDisposable
             _isPaused = true;
             _activeSourceDirectory = FillerDirectory;
             _activeSourcePrefix = "filler_";
-            _activeSourceCursor = 0;
+            _activeSourceCursor = fillerCursor;
             _pendingDiscontinuityOnNextCopy = true;
             StopWatchdogUnlocked();
         }
 
         SpliceTick();
         _spliceTimer = new Timer(_ => SpliceTick(), null, TimeSpan.FromSeconds(SpliceTickSeconds), TimeSpan.FromSeconds(SpliceTickSeconds));
-        _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to filler", elapsedSeconds);
+        _logger.LogInformation("Movie Night: spike 5 - paused at {Seconds:F1}s, spliced to already-warm filler", elapsedSeconds);
         return true;
+    }
+
+    private int GetLatestFillerSegmentIndex()
+    {
+        if (!Directory.Exists(FillerDirectory))
+        {
+            return -1;
+        }
+
+        return Directory.EnumerateFiles(FillerDirectory, "filler_*.ts")
+            .Select(Path.GetFileName)
+            .Where(f => f is not null)
+            .Select(f => ParseFillerSegmentIndex(f!))
+            .Where(i => i.HasValue)
+            .Select(i => i!.Value)
+            .DefaultIfEmpty(-1)
+            .Max();
+    }
+
+    private static int? ParseFillerSegmentIndex(string fileName)
+    {
+        var match = Regex.Match(fileName, @"filler_(\d+)\.ts$");
+        return match.Success ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : null;
     }
 
     /// <summary>
@@ -469,6 +532,69 @@ public sealed class BroadcastManager : IDisposable
         StartWatchdog();
         _logger.LogInformation("Movie Night: spike 5 - resumed from {Position:F1}s (paused at {PausedAt:F1}s), spliced back to movie", resumePosition, pausedAt);
         return true;
+    }
+
+    /// <summary>
+    /// Starts the filler (pause-card) encoder running continuously in the background, right after
+    /// Go Live - so it already has ready segments the instant a pause happens (zero cold start,
+    /// per the DECISIONS.md ruling). Fire-and-forget: a slow/failed filler start doesn't block Go
+    /// Live's own response, and a failure here only matters at the next Pause() attempt.
+    /// </summary>
+    private void StartFillerEncoderInBackground()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                CleanDirectory(FillerDirectory);
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = _mediaEncoder.EncoderPath,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                foreach (var arg in BuildFillerArgs(FillerDirectory))
+                {
+                    startInfo.ArgumentList.Add(arg);
+                }
+
+                var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+                var stderrTail = new StderrTailBuffer();
+                process.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data is not null)
+                    {
+                        stderrTail.Add(e.Data);
+                    }
+                };
+                process.Exited += (_, _) =>
+                {
+                    lock (_lock)
+                    {
+                        if (ReferenceEquals(_fillerProcess, process))
+                        {
+                            _logger.LogWarning("Movie Night: spike 5 - background filler encoder exited unexpectedly. stderr: {Stderr}", stderrTail);
+                            _fillerProcess = null;
+                        }
+                    }
+                };
+
+                process.Start();
+                process.BeginErrorReadLine();
+
+                lock (_lock)
+                {
+                    _fillerProcess = process;
+                }
+
+                _logger.LogInformation("Movie Night: spike 5 - background filler encoder started");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Movie Night: spike 5 - failed to start background filler encoder");
+            }
+        });
     }
 
     private static List<string> BuildFillerArgs(string outputDir) => new List<string>
