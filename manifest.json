@@ -8,6 +8,14 @@
     "category": "Live TV",
     "versions": [
       {
+        "version": "0.3.19.0",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.19.0/jellyfin-plugin-movienight_0.3.19.0.zip",
+        "checksum": "aa21f78da4e586a5d67d75ce08957966",
+        "timestamp": "2026-08-14T23:35:00Z",
+        "changelog": "Fixes a real double-Go-Live race found live within minutes of shipping v0.3.18.0's self-service UI - the Go Live button gave no in-progress feedback, so a double-click fired two concurrent GoLiveAsync calls that both spawned ffmpeg into the same directory and stomped each other. Fixed at the root (the already-Starting/Live check and the state claim now happen atomically, before the only await) plus button debouncing on the config page as defense-in-depth."
+      },
+      {
         "version": "0.3.18.0",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.18.0/jellyfin-plugin-movienight_0.3.18.0.zip",
