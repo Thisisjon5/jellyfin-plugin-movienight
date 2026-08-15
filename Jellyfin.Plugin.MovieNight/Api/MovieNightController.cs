@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.MovieNight.Api;
 
@@ -44,16 +45,19 @@ public class MovieNightController : ControllerBase
 
     private readonly IServerApplicationHost _appHost;
     private readonly BroadcastManager _broadcastManager;
+    private readonly ILogger<MovieNightController> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightController"/> class.
     /// </summary>
     /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
     /// <param name="broadcastManager">Source of truth for whether a broadcast is live and where its HLS output lives.</param>
-    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager)
+    /// <param name="logger">Logger (feed copy-loop instrumentation).</param>
+    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager, ILogger<MovieNightController> logger)
     {
         _appHost = appHost;
         _broadcastManager = broadcastManager;
+        _logger = logger;
     }
 
     /// <summary>
@@ -144,6 +148,7 @@ public class MovieNightController : ControllerBase
         }
 
         HttpContext.Response.ContentType = "video/mp2t";
+        _logger.LogInformation("Movie Night: feed.ts consumer connected");
         try
         {
             while (!cancellationToken.IsCancellationRequested && _broadcastManager.IsSwitcherV2SessionActive())
@@ -158,23 +163,64 @@ public class MovieNightController : ControllerBase
                     continue;
                 }
 
+                long copied = 0;
+                var sourcePid = SafePid(feeder);
+                _logger.LogInformation("Movie Night: feed.ts copying from feeder pid {Pid}", sourcePid);
                 try
                 {
-                    // Returns when the feeder exits (killed for a reseek, or movie ended) - loop
-                    // around and wait for its replacement rather than ending the response.
-                    await feeder.StandardOutput.BaseStream.CopyToAsync(HttpContext.Response.Body, cancellationToken).ConfigureAwait(false);
+                    // Chunked manual copy (not CopyToAsync) so every chunk boundary is a chance to
+                    // notice the current feeder changed - a blocked whole-stream copy was in the
+                    // suspect set for the v0.3.27 pause failure where the slate's bytes never
+                    // reached the switcher. Ends when the source EOFs (feeder killed/movie ended)
+                    // or a swap replaced it.
+                    var buffer = new byte[64 * 1024];
+                    var source = feeder.StandardOutput.BaseStream;
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var read = await source.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                        if (read <= 0)
+                        {
+                            break;
+                        }
+
+                        await HttpContext.Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                        copied += read;
+
+                        if (!ReferenceEquals(_broadcastManager.GetSw2FeederProcess(), feeder))
+                        {
+                            _logger.LogInformation("Movie Night: feed.ts source swapped away from pid {Pid} mid-copy", sourcePid);
+                            break;
+                        }
+                    }
                 }
                 catch (InvalidOperationException)
                 {
                     // Feeder disposed mid-copy; loop and re-fetch.
                 }
 
+                _logger.LogInformation("Movie Night: feed.ts source pid {Pid} ended after {Bytes} bytes", sourcePid, copied);
                 await Task.Delay(200, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
             // Consumer (the switcher process) disconnected - expected.
+        }
+        finally
+        {
+            _logger.LogInformation("Movie Night: feed.ts consumer disconnected");
+        }
+    }
+
+    private static int SafePid(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch (InvalidOperationException)
+        {
+            return -1;
         }
     }
 

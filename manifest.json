@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.28.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.28.0/jellyfin-plugin-movienight_0.3.28.0.zip",
+                "checksum": "807042427ec7446830260015f440f9fc",
+                "timestamp": "2026-08-15T17:07:09Z",
+                "changelog": "Switcher v3 iteration from the clean acceptance run: (1) the persistent per-channel process is now a -c copy passthrough remuxer instead of a QSV re-encode - the re-encode ran at only 0.68-0.8x realtime under full pipeline load, and its sole purpose (continuous timestamps across feeder swaps) is handled by ffmpeg's demuxer-level input discontinuity compensation, which applies to copy remuxes identically; the feeder already outputs the exact target format. (2) feed.ts now copies in 64KB chunks with per-chunk source-swap detection and full instrumentation (consumer connect/disconnect, per-source pids and byte counts) - in the failed run the switcher froze at exactly the pause point having never received a single slate byte, and a blocked whole-stream CopyToAsync was in the suspect set."
+            },
+            {
                 "version": "0.3.27.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.27.0/jellyfin-plugin-movienight_0.3.27.0.zip",

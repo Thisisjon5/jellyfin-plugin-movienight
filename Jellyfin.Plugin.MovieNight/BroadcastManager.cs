@@ -1184,25 +1184,20 @@ public sealed class BroadcastManager : IDisposable
         {
             var feedUrl = FormattableString.Invariant($"http://127.0.0.1:{_sw2HttpPort}/MovieNight/stream/feed.ts");
 
-            // V3 shape (2026-08-15, from RESEARCH-livestreaming-prior-art.md): ONE input. The
-            // v0.3.25 multi-input streamselect graph stalled the whole pipeline whenever the feed
-            // input starved (documented framesync behavior) - the pause card never aired. Now the
-            // PLUGIN switches what flows through the feed (movie feeder vs slate feeder), and this
-            // persistent process just re-encodes whatever arrives, erasing the seams. QSV, not
-            // x264: the software re-encode ran at 0.55x realtime; dual-QSV validated at full
-            // realtime via encode-probe. The feed input stalls briefly (1-3s) during a feeder
-            // swap but never EOFs - the controller's feed.ts holds the connection open. genpts
-            // because each new feeder starts a fresh mpegts timeline; ffmpeg's input
-            // discontinuity compensation was observed healing the jump in the v0.3.25 test.
+            // V3 shape (2026-08-15, from RESEARCH-livestreaming-prior-art.md): ONE input, and as
+            // of v0.3.28 NO re-encode. The persistent process's only real job was rewriting
+            // timestamps continuously across feeder swaps - and ffmpeg's input discontinuity
+            // compensation ("timestamp discontinuity ... new offset") is DEMUXER-level, so it
+            // applies to a -c copy remux exactly as it did to the re-encode where it was first
+            // observed working (v0.3.25 live test). The v0.3.26 QSV re-encode variant ran at only
+            // 0.68-0.8x realtime under the full pipeline load and drifted behind. The feeder
+            // already produces the exact target format (720p h264 + AAC in TS), so this is now a
+            // near-zero-CPU passthrough that smooths seams. genpts because each new feeder starts
+            // a fresh mpegts timeline.
             return new List<string>
             {
                 "-fflags", "+genpts", "-i", feedUrl,
-                "-init_hw_device", "qsv=hw", "-filter_hw_device", "hw",
-                "-c:v", "h264_qsv", "-preset", "veryfast",
-                "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-1:720",
-                "-profile:v", "high", "-level", "4.0", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
-                "-g", "100", "-forced_idr", "1",
-                "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+                "-c", "copy",
                 "-f", "mpegts",
                 "pipe:1",
             };
