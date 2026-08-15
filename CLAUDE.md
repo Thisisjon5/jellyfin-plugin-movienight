@@ -4,45 +4,22 @@ Full spec + phased build plan: `planning/SPEC.md` (canonical — don't re-derive
 
 ## Status
 
-**Phase 0 — DONE (2026-08-13).** Gate met: plugin installs from the manifest URL
-via the NAS Jellyfin dashboard, restarts clean (`Loaded plugin: Movie Night 0.1.0.0`,
-no errors), config page renders. Confirmed by Jon in-browser.
+**Phases 0–2 DONE** (2026-08-13/14): install-from-manifest, tuner/EPG
+registration + channel plays (v0.2.6.0), real QSV Go Live broadcast
+(v0.3.3.0, hardened through v0.3.22's force_key_frames fix). Repo public at
+https://github.com/Thisisjon5/jellyfin-plugin-movienight; manifest.json at
+repo root on master is the install source; target = the NAS's real Jellyfin
+([[jellyfin]], 10.11.6, port 8096).
 
-Repo is public on GitHub: https://github.com/Thisisjon5/jellyfin-plugin-movienight
-(Jon's ruling 2026-08-13, GitHub over Forgejo). v0.1.0.0 tagged and released;
-manifest.json lives at repo root on master, served at
-https://raw.githubusercontent.com/Thisisjon5/jellyfin-plugin-movienight/master/manifest.json,
-registered as a Plugin Repository named "MovieNight" in the NAS Jellyfin's
-`system.xml`. Install target is the NAS's real Jellyfin container ([[jellyfin]],
-10.11.6ubu2404-ls24, host port 8096) — not a throwaway dev instance.
-
-**Phase 1 — DONE (2026-08-13), v0.2.6.0.** Gate met: "Movie Night" channel tunes
-and plays (with audio) in Jellyfin Web, confirmed by Jon directly. `TunerRegistrar`
-(`IHostedService`) registers an `"m3u"` tuner + `"xmltv"` listings provider via
-`ITunerHostManager.SaveTunerHost`/`IListingsManager.SaveListingProvider` (in-process,
-no REST needed — confirmed against actual 10.11.11 source, highest-uncertainty item
-in the whole project, now fully de-risked). `MovieNightController` serves
-`playlist.m3u`/`stream/{fileName}` (master.m3u8 + segments, one dispatching route)/
-`epg.xml`, loopback-only. Five real bugs found and fixed en route (see gotchas) —
-this phase took far more iteration than expected; budget accordingly for Phase 2.
-
-Known follow-up, not blocking: the hand-made test clip is only 15s, which raced
-Jellyfin's live-TV transcode startup latency (~10-17s from tune to first segment)
-closely enough to intermittently trip the client's `levelLoadTimeOut`. Worked on
-retry. Phase 2's real BroadcastManager won't have this problem (continuous ffmpeg
-process, not a finite pre-baked clip) — no fix needed unless Phase 1 spike assets
-get reused for further manual testing, in which case regenerate at 60-90s.
-
-**Phase 2 — DONE (2026-08-14), v0.3.3.0.** Gate met: Go Live actually spawns
-ffmpeg, encodes via the NAS's real Intel QSV hardware, serves HLS, and the
-guide picks it up promptly; natural end and explicit Stop both leave no
-orphan ffmpeg process (confirmed via `nas_memory_status` process list after
-each cycle). `BroadcastManager` (state machine + process lifecycle + stall/
-disk-guard watchdog) and `FfmpegCommandBuilder` (HW accel matrix, unit-tested)
-built clean, but the *first real* Go Live test against actual hardware found
-three genuine bugs no amount of unit testing would've caught — see gotchas.
-Not yet run: the spec's full "20 start/stop cycles" stress test — only a
-handful of manual cycles done today, all clean.
+**Current arc (2026-08-14/15): universal pause → "switcher v3".** The HLS
+splice design (spikes 3–6, v0.3.4–0.3.19) is architecturally dead — its
+discontinuity markers don't survive Jellyfin's remux hop. Replaced by the
+research-validated v3: per-tune persistent `-c copy` remuxer reading a local
+feed URL; the plugin swaps movie-feeder ↔ slate-feeder through that feed for
+pause/resume-at-timestamp. **v0.3.28.0 installed on NAS, acceptance test NOT
+yet run** — start at `planning/HANDOFF-2026-08-15.md`. Full history:
+`planning/ITERATION-LOG.md`; prior-art research:
+`planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
 
 ## Build
 
@@ -148,6 +125,18 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   ffmpeg-args probe that runs into a scratch dir for N seconds and returns
   files+stderr; use it (plus `GET .../debug/encoder-dirs`) for any future
   encoder mystery before reaching for a release-per-experiment loop.
+- **`POST /System/Restart` (Jellyfin API) is enough to load a staged plugin
+  update** — no container restart needed, so plugin install cycles work even
+  when the NAS MCP token is expired. But after ANY server restart, an
+  already-open Jellyfin Web tab reuses a stale `liveStreamId` and the
+  PlaybackInfo endpoint throws NullReferenceException on every tune attempt —
+  the client must hard-reload (F5) before it can tune again. Cost two
+  misdiagnosed "v3 is broken" rounds on 2026-08-15.
+- **Jellyfin's log files are readable over the API** (`GET /System/Logs`,
+  `GET /System/Logs/Log?name=...`) — full server + per-ffmpeg logs without
+  NAS MCP or SSH. Quick Connect can be authorized server-side
+  (`POST /QuickConnect/Authorize?code=X&userId=Y` with an API key) to log a
+  browser in without touching a password.
 - **Jellyfin's "Refresh Guide" scheduled task only runs once every 24h by
   default** (`IntervalTicks: 864000000000` = exactly 1 day, confirmed via
   `ApiClient.getScheduledTasks()`) — a guide-based client (Roku) showed "no

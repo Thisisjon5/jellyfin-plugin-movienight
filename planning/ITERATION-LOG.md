@@ -1,4 +1,4 @@
-# Iteration Log — 2026-08-14 (the universal-pause day)
+# Iteration Log — 2026-08-14/15 (the universal-pause days)
 
 Every version shipped today, what it changed, exactly what was tested, and what
 happened. Written for the "why can't we solve this" retrospective. Companion
@@ -164,3 +164,62 @@ The two open problems, precisely:
 
 See `RESEARCH-livestreaming-prior-art.md` for how existing projects handle
 (and mostly avoid) these exact problems.
+
+## Arc 5 — 2026-08-15 morning: switcher v3, feed-layer switching (v0.3.26–0.3.28)
+
+Jon's go on the research-validated design. Rulings recorded first
+(DECISIONS.md): resume returns to the logged timestamp minus a rewind,
+teardown-and-rewarm acceptable; pause audio quiet/gentle; card-vs-loop is an
+asset decision.
+
+- **Pre-build validation:** encode-probe confirmed two concurrent QSV encode
+  sessions sustain full realtime (a.ts @4Mbps + b.ts @2.5Mbps, both exactly
+  realtime-sized over the window).
+- **0.3.26 — v3 build.** Persistent per-channel process: ONE input (the local
+  feed URL), QSV re-encode. `streamselect`/`astreamselect`/stdin commands
+  deleted from the v2 path. Pause = plugin starts a slate feeder (looping
+  card + quiet tone, x264, yuv420p) and kills the movie feeder; resume =
+  reverse at pausedAt−10s. `feed.ts` holds the switcher's input connection
+  open across swaps (stall, never EOF).
+  **Test 1:** first tune spun forever. Two independent causes found:
+  (a) the eagerly-started feeder had run ~4.5 min unconsumed → its backlog
+  burst through the pipeline at 1.7x → every buffer minutes deep, first-tune
+  probe chewed 21s of surge, Jellyfin's stream session wedged;
+  (b) after a `/System/Restart`, Jellyfin's web client reused a stale
+  liveStreamId and its PlaybackInfo endpoint NREs on it (client page reload
+  clears it — Jellyfin bug, not ours).
+  **Test 2 (fresh client):** tuned and PLAYED — the movie through
+  feeder → feed → copy-consuming switcher → raw TS → remux → browser.
+- **0.3.27 — lazy feeder start.** Feeder now starts from the feed.ts copy
+  loop when the feed first gains a consumer — backlog structurally impossible
+  (also gives crashed feeders a restart path).
+  **Test (clean acceptance):** tune landed at the live edge, zero backlog,
+  movie playing ✓. **Pause still killed the client (~20s):** the
+  stop-log's stderr capture showed the persistent encoder frozen at exactly
+  the pause point — it never received one slate byte; the feed swap delivered
+  nothing. Second finding: the QSV re-encode had been running 0.68–0.8x
+  realtime under the full pipeline load (probe measured raw GPU capacity,
+  not the loaded system), drifting behind before the pause.
+- **0.3.28 — copy remuxer + instrumented chunked feed copy.** Both findings
+  addressed by simplification: the persistent process's only job is
+  continuous timestamps across swaps, and ffmpeg's demuxer-level
+  discontinuity compensation applies to `-c copy` exactly as to the
+  re-encode where it was observed working — so the persistent process is now
+  a near-zero-CPU passthrough (`-fflags +genpts -i feed -c copy -f mpegts`),
+  and the perf question evaporates. The feed copy loop is now chunked (64KB)
+  with per-chunk source-swap detection and full logging (consumer
+  connect/disconnect, per-source pid + byte counts) so any future swap
+  failure names its exact spot.
+  **Status: installed on the NAS, NOT yet tested — session ended here.**
+
+### Where the next session starts
+
+Run the acceptance test on v0.3.28 exactly as scripted: `sw2/golive` (cats
+video 4986b34785abe53a84d2e54ead8fa3a5) → tune switcher channel with a FRESH
+web client → movie plays → `sw2/pause` → slate + quiet tone within pipeline
+latency, session survives → wait 20s → `sw2/resume` → movie back at
+pausedAt−10s, same session. The feed.ts log lines tell the swap story either
+way. Open risks: does `-c copy` actually smooth the swap discontinuity
+downstream (if not: fallback is re-encode with QSV *decode+encode* or lighter
+settings); slate/movie stream-parameter matching under copy (both are 720p
+h264 + 44.1k stereo AAC by construction). See planning/HANDOFF-2026-08-15.md.
