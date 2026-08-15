@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.23.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.23.0/jellyfin-plugin-movienight_0.3.23.0.zip",
+                "checksum": "80b8df5bbbf9078fd0d66a03dea8e9bf",
+                "timestamp": "2026-08-15T01:48:46Z",
+                "changelog": "Switcher spike control channel replaced: jellyfin-ffmpeg is built without libzmq (No such filter: zmq - the spike could never start; also the zmq address escaping was wrong anyway), so input switching now uses ffmpeg's interactive stdin command protocol (c + streamselect -1 map N), verified live on this box to switch losslessly with command reply ret:0. Also: tuner registration now sets no simultaneous-stream limit (TunerCount=0) - the previous limit of 1 meant a single frozen client session blocked every subsequent tune with M3U simultaneous stream limit reached."
+            },
+            {
                 "version": "0.3.22.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.22.0/jellyfin-plugin-movienight_0.3.22.0.zip",

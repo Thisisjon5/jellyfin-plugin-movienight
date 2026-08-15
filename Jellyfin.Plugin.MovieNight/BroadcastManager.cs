@@ -37,7 +37,6 @@ public sealed class BroadcastManager : IDisposable
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
     private const int ResumeWarmupBufferSeconds = 30;
-    private const int SwitcherSpikeZmqPort = 5556;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -53,6 +52,7 @@ public sealed class BroadcastManager : IDisposable
 
     private Process? _process;
     private Process? _fillerProcess;
+    private Process? _switcherSpikeProcess;
     private Timer? _watchdogTimer;
     private StderrTailBuffer? _stderrTail;
     private BroadcastState _state = BroadcastState.Idle;
@@ -1052,8 +1052,11 @@ public sealed class BroadcastManager : IDisposable
     /// process with inputs makes sense to try as does raw mpeg tuner"): one continuous ffmpeg
     /// process holds three synthetic color/tone inputs open simultaneously (standing in for the
     /// real welcome/pause/goodbye assets, which don't exist yet), switched via a
-    /// <c>streamselect</c> filter whose active input is controlled live over a <c>zmq</c> control
-    /// socket - see <see cref="SendSwitcherSpikeCommandAsync"/>. Explicitly does not attempt movie
+    /// <c>streamselect</c> filter. Control channel is ffmpeg's interactive stdin command protocol
+    /// (the 'c' keypress + <c>streamselect -1 map N</c>), NOT zmq: jellyfin-ffmpeg 7.1.3 is built
+    /// without libzmq ("No such filter: 'zmq'", confirmed 2026-08-14 via encode-probe on the real
+    /// box), while the stdin protocol is core ffmpeg and was verified live to switch losslessly
+    /// (frame-inspected color change, command reply ret:0). Explicitly does not attempt movie
     /// seek/switching (ffmpeg has no live-reseek primitive for an open input, per the ruling) -
     /// this spike only tests whether lossless switching among the three static sources works and
     /// survives Jellyfin's own remux hop. Same standalone/independent-of-real-state model as
@@ -1065,6 +1068,7 @@ public sealed class BroadcastManager : IDisposable
         var startInfo = new ProcessStartInfo
         {
             FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -1077,7 +1081,13 @@ public sealed class BroadcastManager : IDisposable
 
         try
         {
-            return Process.Start(startInfo);
+            var process = Process.Start(startInfo);
+            lock (_lock)
+            {
+                _switcherSpikeProcess = process;
+            }
+
+            return process;
         }
         catch (Exception ex)
         {
@@ -1092,6 +1102,14 @@ public sealed class BroadcastManager : IDisposable
     /// <param name="process">The process to stop and dispose.</param>
     public void StopSwitcherSpikeProcess(Process process)
     {
+        lock (_lock)
+        {
+            if (ReferenceEquals(_switcherSpikeProcess, process))
+            {
+                _switcherSpikeProcess = null;
+            }
+        }
+
         try
         {
             if (!process.HasExited)
@@ -1115,8 +1133,7 @@ public sealed class BroadcastManager : IDisposable
         "-re", "-f", "lavfi", "-i", "color=c=maroon:s=1280x720:r=30",
         "-re", "-f", "lavfi", "-i", "color=c=darkgreen:s=1280x720:r=30",
         "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-        "-filter_complex",
-        FormattableString.Invariant($"[0:v][1:v][2:v]streamselect=inputs=3:map=0,zmq=bind_address=tcp\\://127.0.0.1\\:{SwitcherSpikeZmqPort}[vout]"),
+        "-filter_complex", "[0:v][1:v][2:v]streamselect=inputs=3:map=0[vout]",
         "-map", "[vout]", "-map", "3:a",
         "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
         "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
@@ -1126,55 +1143,38 @@ public sealed class BroadcastManager : IDisposable
     };
 
     /// <summary>
-    /// Sends a live <c>streamselect map N</c> command to whichever switcher spike process is
-    /// currently running, via ffmpeg's own bundled <c>zmqsend</c> helper (only shipped by ffmpeg
-    /// builds compiled with libzmq support - not guaranteed present, which is itself part of what
-    /// this spike is testing). No process-object plumbing needed: the zmq control port is fixed
-    /// (<see cref="SwitcherSpikeZmqPort"/>), so this works against whatever switcher spike process
-    /// the client's HTTP connection is currently keeping alive, independent of this call.
+    /// Sends a live <c>streamselect map N</c> command to the currently-running switcher spike
+    /// process over its stdin, using ffmpeg's interactive command protocol: the single character
+    /// <c>c</c> enters command mode, then one line of <c>&lt;target&gt; &lt;time&gt; &lt;command&gt;
+    /// &lt;arg&gt;</c> (time -1 = now). Verified live 2026-08-14: piped (non-tty) stdin is
+    /// accepted, the filter replies ret:0, and the output stream switches losslessly.
     /// </summary>
     /// <param name="inputIndex">Which of the 3 static inputs to switch to (0, 1, or 2).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns><c>true</c> plus zmqsend's own output on success, <c>false</c> plus a diagnostic message otherwise.</returns>
+    /// <returns><c>true</c> on success, <c>false</c> plus a diagnostic message otherwise.</returns>
     public async Task<(bool Success, string Output)> SendSwitcherSpikeCommandAsync(int inputIndex, CancellationToken cancellationToken)
     {
-        var ffmpegDir = Path.GetDirectoryName(_mediaEncoder.EncoderPath);
-        var zmqSendPath = ffmpegDir is null ? null : Path.Combine(ffmpegDir, OperatingSystem.IsWindows() ? "zmqsend.exe" : "zmqsend");
-        if (zmqSendPath is null || !File.Exists(zmqSendPath))
+        Process? process;
+        lock (_lock)
         {
-            return (false, $"zmqsend not found at {zmqSendPath ?? "(unknown)"} - this ffmpeg build may not include libzmq support");
+            process = _switcherSpikeProcess;
         }
 
-        var startInfo = new ProcessStartInfo
+        if (process is null || process.HasExited)
         {
-            FileName = zmqSendPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add("-b");
-        startInfo.ArgumentList.Add(FormattableString.Invariant($"tcp://127.0.0.1:{SwitcherSpikeZmqPort}"));
-        startInfo.ArgumentList.Add(FormattableString.Invariant($"streamselect map {inputIndex}"));
-
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            return (false, "Failed to start zmqsend process");
+            return (false, "No switcher spike process running - tune the switcher spike channel first");
         }
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token).ConfigureAwait(false);
-            var stderr = await process.StandardError.ReadToEndAsync(cts.Token).ConfigureAwait(false);
-            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-            return (process.ExitCode == 0, string.IsNullOrWhiteSpace(stdout) ? stderr : stdout);
+            var command = FormattableString.Invariant($"cstreamselect -1 map {inputIndex}\n");
+            await process.StandardInput.WriteAsync(command.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return (true, $"sent: streamselect -1 map {inputIndex}");
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
         {
-            return (false, "zmqsend timed out after 5s - no switcher spike process listening? (tune the switcher spike channel first)");
+            return (false, $"Failed to write to switcher stdin: {ex.Message}");
         }
     }
 
@@ -1666,6 +1666,7 @@ public sealed class BroadcastManager : IDisposable
         }
 
         _process?.Dispose();
+        _switcherSpikeProcess?.Dispose();
     }
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

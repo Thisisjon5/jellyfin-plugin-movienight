@@ -104,7 +104,11 @@ public class TunerRegistrar : IHostedService
             tunerInfo.Url = playlistUrl;
             tunerInfo.Type = "m3u";
             tunerInfo.FriendlyName = ChannelName;
-            tunerInfo.TunerCount = 1;
+            // 0 = no simultaneous-stream limit. TunerCount=1 meant a single stale/frozen client
+            // session held the only slot and every other tune attempt got "M3U simultaneous
+            // stream limit has been reached" (hit live 2026-08-14). This tuner fans out one
+            // server-side encode, so there's no hardware reason to cap concurrent viewers.
+            tunerInfo.TunerCount = 0;
 
             await _tunerHostManager.SaveTunerHost(tunerInfo).ConfigureAwait(false);
             _logger.LogInformation("Movie Night: registered M3U tuner at {Url}", playlistUrl);
