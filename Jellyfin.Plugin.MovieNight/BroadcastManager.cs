@@ -37,6 +37,8 @@ public sealed class BroadcastManager : IDisposable
     private const int ServedWindowSize = 10;
     private const int SpliceTickSeconds = 2;
     private const int ResumeWarmupBufferSeconds = 30;
+    private const int Sw2ResumeRewindSeconds = 10;
+    private const int Sw2ResumeWarmupSeconds = 5;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -56,6 +58,18 @@ public sealed class BroadcastManager : IDisposable
     // process that isn't the one actually feeding the player. Commands are written to every live
     // process; each entry carries its stderr tail so ffmpeg's command replies are inspectable.
     private readonly List<(Process Process, StderrTailBuffer Stderr)> _switcherSpikeProcesses = new();
+
+    // SWITCHER V2 spike state (see BuildSwitcherSpikeArgs): the configured movie, the restartable
+    // feeder that decodes/encodes it into the local feed the switcher consumes, and the position
+    // bookkeeping Jon's resume ruling requires (pause logs the movie timestamp; resume restarts
+    // the feeder a little before it). All guarded by _lock.
+    private string? _sw2MoviePath;
+    private int _sw2HttpPort;
+    private double _sw2FeederStartSeconds;
+    private DateTime? _sw2FeederStartedUtc;
+    private bool _sw2Paused;
+    private Process? _sw2FeederProcess;
+    private StderrTailBuffer? _sw2FeederStderr;
 
     private Process? _process;
     private Process? _fillerProcess;
@@ -1152,20 +1166,62 @@ public sealed class BroadcastManager : IDisposable
         }
     }
 
-    private static List<string> BuildSwitcherSpikeArgs() => new List<string>
+    private List<string> BuildSwitcherSpikeArgs()
     {
-        "-re", "-f", "lavfi", "-i", "color=c=blue:s=1280x720:r=30",
-        "-re", "-f", "lavfi", "-i", "color=c=maroon:s=1280x720:r=30",
-        "-re", "-f", "lavfi", "-i", "color=c=darkgreen:s=1280x720:r=30",
-        "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-        "-filter_complex", "[0:v][1:v][2:v]streamselect=inputs=3:map=0[vout]",
-        "-map", "[vout]", "-map", "3:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
-        "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
-        "-c:a", "aac", "-b:a", "96k", "-ac", "2",
-        "-f", "mpegts",
-        "pipe:1",
-    };
+        // SWITCHER V2 (2026-08-14 evening, Jon: "let's do it"): when a movie has been configured
+        // via the sw2 debug endpoints, the switcher channel serves the REAL graph - the movie
+        // arriving through the restartable feeder (input 0) plus a pause card with quiet tone
+        // (inputs 1/2), with video AND audio switched together. Without a configured movie it
+        // stays the original three-color proof.
+        string? moviePath;
+        lock (_lock)
+        {
+            moviePath = _sw2MoviePath;
+        }
+
+        if (moviePath is not null)
+        {
+            var feedUrl = FormattableString.Invariant($"http://127.0.0.1:{_sw2HttpPort}/MovieNight/stream/feed.ts");
+            return new List<string>
+            {
+                // The feed input stalls (no bytes, no EOF) while the feeder is being restarted at
+                // a new position - the controller's feed.ts endpoint holds the connection open
+                // across feeder swaps precisely so this input never terminates. genpts because
+                // each new feeder starts a fresh mpegts timeline.
+                "-fflags", "+genpts", "-i", feedUrl,
+                "-re", "-f", "lavfi", "-i", "color=c=darkslategray:s=1280x720:r=30",
+                "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=44100",
+                "-filter_complex",
+                "[0:v]fps=30,scale=1280:720,format=yuv420p[mv];" +
+                "[1:v]format=yuv420p[pv];" +
+                "[0:a]aresample=44100:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo[ma];" +
+                "[2:a]aresample=44100,volume=0.15,aformat=sample_fmts=fltp:channel_layouts=stereo[pa];" +
+                "[mv][pv]streamselect=inputs=2:map=0[vout];" +
+                "[ma][pa]astreamselect=inputs=2:map=0[aout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+                "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+                "-f", "mpegts",
+                "pipe:1",
+            };
+        }
+
+        return new List<string>
+        {
+            "-re", "-f", "lavfi", "-i", "color=c=blue:s=1280x720:r=30",
+            "-re", "-f", "lavfi", "-i", "color=c=maroon:s=1280x720:r=30",
+            "-re", "-f", "lavfi", "-i", "color=c=darkgreen:s=1280x720:r=30",
+            "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+            "-filter_complex", "[0:v][1:v][2:v]streamselect=inputs=3:map=0[vout]",
+            "-map", "[vout]", "-map", "3:a",
+            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+            "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+            "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+            "-f", "mpegts",
+            "pipe:1",
+        };
+    }
 
     /// <summary>
     /// Sends a live <c>streamselect map N</c> command to the currently-running switcher spike
@@ -1190,7 +1246,10 @@ public sealed class BroadcastManager : IDisposable
             return (false, "No switcher spike process running - tune the switcher spike channel first");
         }
 
-        var command = FormattableString.Invariant($"cstreamselect -1 map {inputIndex}\n");
+        // Target "all" rather than a filter name so the command reaches BOTH streamselect and
+        // astreamselect in the v2 graph (filters that don't understand "map" reply ENOSYS, which
+        // is harmless and visible in the stderr echo).
+        var command = FormattableString.Invariant($"call -1 map {inputIndex}\n");
         var results = new List<string>();
         var anySuccess = false;
         foreach (var (process, stderr) in targets)
@@ -1227,6 +1286,259 @@ public sealed class BroadcastManager : IDisposable
         var output = $"streamselect -1 map {inputIndex} -> {targets.Count} process(es)\n" + string.Join('\n', results);
         _logger.LogInformation("Movie Night: switcher spike command: {Output}", output);
         return (anySuccess, output);
+    }
+
+    /// <summary>
+    /// SWITCHER V2: configures the movie the switcher channel should carry and starts its feeder
+    /// from the beginning. The switcher process itself spawns when a client tunes the channel.
+    /// </summary>
+    /// <param name="itemPath">Filesystem path of the movie.</param>
+    /// <param name="httpPort">The server's own HTTP port, for the loopback feed URL.</param>
+    public void ConfigureSwitcherV2(string itemPath, int httpPort)
+    {
+        Process? oldFeeder;
+        lock (_lock)
+        {
+            oldFeeder = _sw2FeederProcess;
+            _sw2FeederProcess = null;
+            _sw2MoviePath = itemPath;
+            _sw2HttpPort = httpPort;
+            _sw2Paused = false;
+        }
+
+        KillSw2Feeder(oldFeeder);
+        StartSw2Feeder(0);
+        _logger.LogInformation("Movie Night: switcher v2 configured for {Path}", itemPath);
+    }
+
+    /// <summary>
+    /// SWITCHER V2: tears the session down - feeder killed, movie cleared, the switcher channel
+    /// falls back to the three-color test graph on next tune.
+    /// </summary>
+    public void ClearSwitcherV2()
+    {
+        Process? oldFeeder;
+        lock (_lock)
+        {
+            oldFeeder = _sw2FeederProcess;
+            _sw2FeederProcess = null;
+            _sw2MoviePath = null;
+            _sw2Paused = false;
+            _sw2FeederStartSeconds = 0;
+            _sw2FeederStartedUtc = null;
+        }
+
+        KillSw2Feeder(oldFeeder);
+        _logger.LogInformation("Movie Night: switcher v2 cleared");
+    }
+
+    /// <summary>
+    /// SWITCHER V2: pauses - logs the movie position (feeder start offset plus wall-clock elapsed,
+    /// the same wall-clock ruling as the HLS design), switches BOTH selects to the pause card, and
+    /// kills the feeder so the movie stops being consumed while paused.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Success plus the logged pause position (or a diagnostic).</returns>
+    public async Task<(bool Success, string Output)> PauseSwitcherV2Async(CancellationToken cancellationToken)
+    {
+        Process? feeder;
+        double pausedAt;
+        lock (_lock)
+        {
+            if (_sw2MoviePath is null || _sw2Paused)
+            {
+                return (false, "No switcher v2 session, or already paused");
+            }
+
+            pausedAt = _sw2FeederStartSeconds + (_sw2FeederStartedUtc is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0);
+            _sw2FeederStartSeconds = pausedAt;
+            _sw2FeederStartedUtc = null;
+            _sw2Paused = true;
+            feeder = _sw2FeederProcess;
+            _sw2FeederProcess = null;
+        }
+
+        var (sent, output) = await SendSwitcherSpikeCommandAsync(1, cancellationToken).ConfigureAwait(false);
+        KillSw2Feeder(feeder);
+        _logger.LogInformation("Movie Night: switcher v2 paused at {Position:F1}s", pausedAt);
+        return (sent, FormattableString.Invariant($"paused at {pausedAt:F1}s\n{output}"));
+    }
+
+    /// <summary>
+    /// SWITCHER V2: resumes - restarts the feeder a little before the logged pause position
+    /// (Jon's ruling: back to the timestamp, or actually a little before it), gives it a few
+    /// seconds to warm so the switcher's stalled feed input has fresh data, then switches both
+    /// selects back to the movie.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Success plus the resume position (or a diagnostic).</returns>
+    public async Task<(bool Success, string Output)> ResumeSwitcherV2Async(CancellationToken cancellationToken)
+    {
+        double resumeAt;
+        lock (_lock)
+        {
+            if (_sw2MoviePath is null || !_sw2Paused)
+            {
+                return (false, "No switcher v2 session, or not paused");
+            }
+
+            resumeAt = Math.Max(0, _sw2FeederStartSeconds - Sw2ResumeRewindSeconds);
+        }
+
+        StartSw2Feeder(resumeAt);
+
+        // Let the fresh feeder push real data into the switcher's stalled feed input before
+        // cutting to it - the pause card keeps showing during this, so nothing is user-visible.
+        await Task.Delay(TimeSpan.FromSeconds(Sw2ResumeWarmupSeconds), cancellationToken).ConfigureAwait(false);
+
+        var (sent, output) = await SendSwitcherSpikeCommandAsync(0, cancellationToken).ConfigureAwait(false);
+        lock (_lock)
+        {
+            _sw2Paused = false;
+        }
+
+        _logger.LogInformation("Movie Night: switcher v2 resumed from {Position:F1}s", resumeAt);
+        return (sent, FormattableString.Invariant($"resumed from {resumeAt:F1}s\n{output}"));
+    }
+
+    /// <summary>
+    /// SWITCHER V2: session snapshot for the debug status endpoint.
+    /// </summary>
+    /// <returns>Movie path, pause state, current movie position, and process liveness.</returns>
+    public object GetSwitcherV2Status()
+    {
+        lock (_lock)
+        {
+            var position = _sw2FeederStartSeconds + (_sw2FeederStartedUtc is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0);
+            return new
+            {
+                MoviePath = _sw2MoviePath,
+                Paused = _sw2Paused,
+                PositionSeconds = Math.Round(position, 1),
+                FeederAlive = _sw2FeederProcess is not null && !_sw2FeederProcess.HasExited,
+                SwitcherProcessCount = _switcherSpikeProcesses.Count,
+            };
+        }
+    }
+
+    /// <summary>
+    /// SWITCHER V2: the current feeder process, for the controller's feed.ts copy loop. May change
+    /// between calls (resume swaps feeders) - the copy loop re-fetches after each stream ends.
+    /// </summary>
+    /// <returns>The live feeder process, or <c>null</c> if none is running right now.</returns>
+    public Process? GetSw2FeederProcess()
+    {
+        lock (_lock)
+        {
+            return _sw2FeederProcess is not null && !_sw2FeederProcess.HasExited ? _sw2FeederProcess : null;
+        }
+    }
+
+    /// <summary>
+    /// SWITCHER V2: whether a movie session is configured (drives whether feed.ts stays open).
+    /// </summary>
+    /// <returns><c>true</c> while a movie is configured.</returns>
+    public bool IsSwitcherV2SessionActive()
+    {
+        lock (_lock)
+        {
+            return _sw2MoviePath is not null;
+        }
+    }
+
+    private void StartSw2Feeder(double startSeconds)
+    {
+        string moviePath;
+        lock (_lock)
+        {
+            if (_sw2MoviePath is null)
+            {
+                return;
+            }
+
+            moviePath = _sw2MoviePath;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        // QSV-only for the spike (this NAS's real config); mirrors the proven Go Live video chain
+        // including the v0.3.22 keyframe fix. Mezzanine bitrate a bit above the final encode so
+        // the switcher's re-encode isn't stacking two lossy passes at the same rate.
+        var args = new List<string>();
+        if (startSeconds > 0)
+        {
+            args.AddRange(["-ss", startSeconds.ToString("F3", CultureInfo.InvariantCulture)]);
+        }
+
+        args.AddRange(["-re", "-i", moviePath]);
+        args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-1:720"]);
+        args.AddRange(["-profile:v", "high", "-level", "4.0", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k", "-g", "100", "-forced_idr", "1"]);
+        args.AddRange(["-c:a", "aac", "-b:a", "128k", "-ac", "2"]);
+        args.AddRange(["-f", "mpegts", "pipe:1"]);
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            var process = new Process { StartInfo = startInfo };
+            var stderrTail = new StderrTailBuffer();
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data is not null)
+                {
+                    stderrTail.Add(e.Data);
+                }
+            };
+            process.Start();
+            process.BeginErrorReadLine();
+
+            lock (_lock)
+            {
+                _sw2FeederProcess = process;
+                _sw2FeederStderr = stderrTail;
+                _sw2FeederStartSeconds = startSeconds;
+                _sw2FeederStartedUtc = DateTime.UtcNow;
+            }
+
+            _logger.LogInformation("Movie Night: switcher v2 feeder pid {Pid} started at {Position:F1}s", process.Id, startSeconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: switcher v2 - failed to start feeder");
+        }
+    }
+
+    private void KillSw2Feeder(Process? feeder)
+    {
+        if (feeder is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!feeder.HasExited)
+            {
+                feeder.Kill();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited; nothing to do.
+        }
+        finally
+        {
+            feeder.Dispose();
+        }
     }
 
     /// <summary>
@@ -1725,6 +2037,8 @@ public sealed class BroadcastManager : IDisposable
             }
 
             _switcherSpikeProcesses.Clear();
+            _sw2FeederProcess?.Dispose();
+            _sw2FeederProcess = null;
         }
     }
 

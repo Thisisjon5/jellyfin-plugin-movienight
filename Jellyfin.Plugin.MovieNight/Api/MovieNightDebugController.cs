@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Session;
 using Microsoft.AspNetCore.Authorization;
@@ -24,16 +26,22 @@ public class MovieNightDebugController : ControllerBase
 {
     private readonly ISessionManager _sessionManager;
     private readonly BroadcastManager _broadcastManager;
+    private readonly ILibraryManager _libraryManager;
+    private readonly IServerApplicationHost _appHost;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightDebugController"/> class.
     /// </summary>
     /// <param name="sessionManager">Used to read session play state and push playstate commands.</param>
     /// <param name="broadcastManager">Used to drive the switcher spike.</param>
-    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager)
+    /// <param name="libraryManager">Used to resolve item ids for the switcher v2 session.</param>
+    /// <param name="appHost">Used to build the loopback feed URL for switcher v2.</param>
+    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager, ILibraryManager libraryManager, IServerApplicationHost appHost)
     {
         _sessionManager = sessionManager;
         _broadcastManager = broadcastManager;
+        _libraryManager = libraryManager;
+        _appHost = appHost;
     }
 
     /// <summary>
@@ -107,6 +115,61 @@ public class MovieNightDebugController : ControllerBase
     /// <returns>Per-directory existence plus file names, sizes, and last-write times.</returns>
     [HttpGet("encoder-dirs")]
     public ActionResult GetEncoderDirs() => Ok(_broadcastManager.DescribeOutputDirectories());
+
+    /// <summary>
+    /// SWITCHER V2: configures the movie the switcher spike channel should carry (feeder starts
+    /// immediately from position 0; the switcher itself spawns when a client tunes the channel).
+    /// </summary>
+    /// <param name="itemId">Library item id of the movie.</param>
+    /// <returns>200 with the resolved path, or 404.</returns>
+    [HttpPost("sw2/golive")]
+    public ActionResult Sw2GoLive([FromQuery] Guid itemId)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+#pragma warning disable CA3003 // itemId is an opaque library key, same rationale as GoLiveAsync
+        if (item is null || string.IsNullOrEmpty(item.Path) || !System.IO.File.Exists(item.Path))
+        {
+            return NotFound($"Item {itemId} not found or has no file on disk");
+        }
+
+        _broadcastManager.ConfigureSwitcherV2(item.Path, _appHost.HttpPort);
+#pragma warning restore CA3003
+        return Ok(new { item.Path });
+    }
+
+    /// <summary>SWITCHER V2: pause - logs movie position, cuts to the pause card, stops the feeder.</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>200/409 with the position and per-process command echoes.</returns>
+    [HttpPost("sw2/pause")]
+    public async Task<ActionResult> Sw2Pause(CancellationToken cancellationToken)
+    {
+        var (success, output) = await _broadcastManager.PauseSwitcherV2Async(cancellationToken).ConfigureAwait(false);
+        return success ? Ok(output) : Conflict(output);
+    }
+
+    /// <summary>SWITCHER V2: resume - feeder restarts a little before the pause position, then cuts back.</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>200/409 with the resume position and per-process command echoes.</returns>
+    [HttpPost("sw2/resume")]
+    public async Task<ActionResult> Sw2Resume(CancellationToken cancellationToken)
+    {
+        var (success, output) = await _broadcastManager.ResumeSwitcherV2Async(cancellationToken).ConfigureAwait(false);
+        return success ? Ok(output) : Conflict(output);
+    }
+
+    /// <summary>SWITCHER V2: session status snapshot.</summary>
+    /// <returns>Movie path, pause state, position, process liveness.</returns>
+    [HttpGet("sw2/status")]
+    public ActionResult Sw2Status() => Ok(_broadcastManager.GetSwitcherV2Status());
+
+    /// <summary>SWITCHER V2: tear the session down (channel reverts to the color test).</summary>
+    /// <returns>200.</returns>
+    [HttpPost("sw2/stop")]
+    public ActionResult Sw2Stop()
+    {
+        _broadcastManager.ClearSwitcherV2();
+        return Ok();
+    }
 
     /// <summary>
     /// Diagnostic encode probe (added 2026-08-14 for the 25fps Go Live stall - see

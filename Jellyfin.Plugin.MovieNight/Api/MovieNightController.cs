@@ -126,6 +126,56 @@ public class MovieNightController : ControllerBase
         PipeRawTsProcessAsync(_broadcastManager.StartSwitcherSpikeProcess, _broadcastManager.StopSwitcherSpikeProcess, cancellationToken);
 
     /// <summary>
+    /// SWITCHER V2: the movie feed the switcher process consumes as its input 0. The load-bearing
+    /// property is that this response NEVER ends while a v2 session is active - when the feeder is
+    /// restarted at a new position (resume-at-timestamp), the copy loop simply stalls until the
+    /// replacement feeder exists and then continues, so the switcher's input sees a pause in
+    /// bytes, never an EOF, and the switcher process itself never has to restart.
+    /// </summary>
+    /// <param name="cancellationToken">Bound to the switcher's HTTP connection.</param>
+    /// <returns>A task that completes when the v2 session is cleared or the consumer disconnects.</returns>
+    [HttpGet("stream/feed.ts")]
+    public async Task GetSwitcherV2Feed(CancellationToken cancellationToken)
+    {
+        if (!IsLoopbackRequest())
+        {
+            HttpContext.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+            return;
+        }
+
+        HttpContext.Response.ContentType = "video/mp2t";
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && _broadcastManager.IsSwitcherV2SessionActive())
+            {
+                var feeder = _broadcastManager.GetSw2FeederProcess();
+                if (feeder is null)
+                {
+                    await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                try
+                {
+                    // Returns when the feeder exits (killed for a reseek, or movie ended) - loop
+                    // around and wait for its replacement rather than ending the response.
+                    await feeder.StandardOutput.BaseStream.CopyToAsync(HttpContext.Response.Body, cancellationToken).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Feeder disposed mid-copy; loop and re-fetch.
+                }
+
+                await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Consumer (the switcher process) disconnected - expected.
+        }
+    }
+
+    /// <summary>
     /// Shared plumbing for both raw-MPEG-TS spike endpoints: starts a process via
     /// <paramref name="startProcess"/>, streams its stdout to the response body until the client
     /// disconnects or the process exits, then stops it via <paramref name="stopProcess"/>.

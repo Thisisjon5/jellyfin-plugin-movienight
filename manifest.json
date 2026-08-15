@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.25.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.25.0/jellyfin-plugin-movienight_0.3.25.0.zip",
+                "checksum": "0f9e18449884977d5deaf7bb115d151e",
+                "timestamp": "2026-08-15T02:56:37Z",
+                "changelog": "Switcher v2 spike - real content through the validated single-process architecture: a restartable QSV feeder decodes the configured movie at a given position into a persistent local TS feed (feed.ts holds the connection open across feeder swaps so the switcher input stalls but never EOFs), and the switcher carries movie + pause-card inputs with video AND audio switched together (streamselect + astreamselect, quiet 196Hz tone during pause per Jon's ruling). Pause logs the movie timestamp and kills the feeder (movie stops advancing); resume restarts the feeder 10s before the logged position, warms 5s behind the pause card, then cuts back. Driven via /MovieNight/api/debug/sw2/{golive,pause,resume,status,stop}; the switcher spike channel carries the v2 graph whenever a movie is configured, else the color test."
+            },
+            {
                 "version": "0.3.24.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.24.0/jellyfin-plugin-movienight_0.3.24.0.zip",
