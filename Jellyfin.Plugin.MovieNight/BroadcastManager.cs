@@ -50,9 +50,15 @@ public sealed class BroadcastManager : IDisposable
     // this class has taken over writing it (see the fields below and Pause()/Resume()).
     private readonly List<(string FileName, double Duration, bool DiscontinuityBefore)> _servedSegments = new();
 
+    // All CURRENTLY-LIVE switcher spike processes, not just the newest: Jellyfin can hold more
+    // than one connection to the switcher URL open at once (probe + SharedHttpStream copy), each
+    // of which spawns its own process, and a "send to the most recent one" design can address a
+    // process that isn't the one actually feeding the player. Commands are written to every live
+    // process; each entry carries its stderr tail so ffmpeg's command replies are inspectable.
+    private readonly List<(Process Process, StderrTailBuffer Stderr)> _switcherSpikeProcesses = new();
+
     private Process? _process;
     private Process? _fillerProcess;
-    private Process? _switcherSpikeProcess;
     private Timer? _watchdogTimer;
     private StderrTailBuffer? _stderrTail;
     private BroadcastState _state = BroadcastState.Idle;
@@ -1081,12 +1087,24 @@ public sealed class BroadcastManager : IDisposable
 
         try
         {
-            var process = Process.Start(startInfo);
+            var process = new Process { StartInfo = startInfo };
+            var stderrTail = new StderrTailBuffer();
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data is not null)
+                {
+                    stderrTail.Add(e.Data);
+                }
+            };
+            process.Start();
+            process.BeginErrorReadLine();
+
             lock (_lock)
             {
-                _switcherSpikeProcess = process;
+                _switcherSpikeProcesses.Add((process, stderrTail));
             }
 
+            _logger.LogInformation("Movie Night: switcher spike - started encoder pid {Pid}", process.Id);
             return process;
         }
         catch (Exception ex)
@@ -1097,25 +1115,32 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
-    /// Stops a process started by <see cref="StartSwitcherSpikeProcess"/>.
+    /// Stops a process started by <see cref="StartSwitcherSpikeProcess"/>, logging its stderr
+    /// tail so ffmpeg's reaction to stdin commands is visible after the fact.
     /// </summary>
     /// <param name="process">The process to stop and dispose.</param>
     public void StopSwitcherSpikeProcess(Process process)
     {
+        StderrTailBuffer? stderrTail = null;
         lock (_lock)
         {
-            if (ReferenceEquals(_switcherSpikeProcess, process))
+            var index = _switcherSpikeProcesses.FindIndex(e => ReferenceEquals(e.Process, process));
+            if (index >= 0)
             {
-                _switcherSpikeProcess = null;
+                stderrTail = _switcherSpikeProcesses[index].Stderr;
+                _switcherSpikeProcesses.RemoveAt(index);
             }
         }
 
         try
         {
+            var pid = process.Id;
             if (!process.HasExited)
             {
                 process.Kill();
             }
+
+            _logger.LogInformation("Movie Night: switcher spike - stopped encoder pid {Pid}. stderr tail: {Stderr}", pid, stderrTail?.ToString() ?? "(untracked)");
         }
         catch (InvalidOperationException)
         {
@@ -1154,28 +1179,54 @@ public sealed class BroadcastManager : IDisposable
     /// <returns><c>true</c> on success, <c>false</c> plus a diagnostic message otherwise.</returns>
     public async Task<(bool Success, string Output)> SendSwitcherSpikeCommandAsync(int inputIndex, CancellationToken cancellationToken)
     {
-        Process? process;
+        List<(Process Process, StderrTailBuffer Stderr)> targets;
         lock (_lock)
         {
-            process = _switcherSpikeProcess;
+            targets = new List<(Process, StderrTailBuffer)>(_switcherSpikeProcesses);
         }
 
-        if (process is null || process.HasExited)
+        if (targets.Count == 0)
         {
             return (false, "No switcher spike process running - tune the switcher spike channel first");
         }
 
-        try
+        var command = FormattableString.Invariant($"cstreamselect -1 map {inputIndex}\n");
+        var results = new List<string>();
+        var anySuccess = false;
+        foreach (var (process, stderr) in targets)
         {
-            var command = FormattableString.Invariant($"cstreamselect -1 map {inputIndex}\n");
-            await process.StandardInput.WriteAsync(command.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
-            return (true, $"sent: streamselect -1 map {inputIndex}");
+            try
+            {
+                if (process.HasExited)
+                {
+                    results.Add($"pid {process.Id}: already exited");
+                    continue;
+                }
+
+                await process.StandardInput.WriteAsync(command.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+                anySuccess = true;
+                results.Add($"pid {process.Id}: sent");
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException)
+            {
+                results.Add($"pid {process.Id}: write failed - {ex.Message}");
+            }
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+
+        // Give ffmpeg a moment to react, then include each process's recent stderr so the
+        // command replies (or their absence) are visible directly in the API response.
+        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+        foreach (var (process, stderr) in targets)
         {
-            return (false, $"Failed to write to switcher stdin: {ex.Message}");
+            var tail = stderr.ToString();
+            var lastLines = tail.Length > 400 ? tail[^400..] : tail;
+            results.Add($"pid {process.Id} stderr tail: {lastLines}");
         }
+
+        var output = $"streamselect -1 map {inputIndex} -> {targets.Count} process(es)\n" + string.Join('\n', results);
+        _logger.LogInformation("Movie Night: switcher spike command: {Output}", output);
+        return (anySuccess, output);
     }
 
     /// <summary>
@@ -1666,7 +1717,15 @@ public sealed class BroadcastManager : IDisposable
         }
 
         _process?.Dispose();
-        _switcherSpikeProcess?.Dispose();
+        lock (_lock)
+        {
+            foreach (var (process, _) in _switcherSpikeProcesses)
+            {
+                process.Dispose();
+            }
+
+            _switcherSpikeProcesses.Clear();
+        }
     }
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

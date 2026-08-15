@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.24.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.24.0/jellyfin-plugin-movienight_0.3.24.0.zip",
+                "checksum": "667b8dfb8cbd500709b70cce3c00fd9a",
+                "timestamp": "2026-08-15T01:57:46Z",
+                "changelog": "Switcher spike diagnostics: v0.3.23's stdin switching had no visible effect on the live stream, so the control path is now fully observable - every live switcher process is tracked (Jellyfin can hold multiple connections open, each spawning its own encoder) and switch commands are written to ALL of them; the switcher-select response and server log now include each process's pid and recent stderr, so ffmpeg's command replies (or their absence) are directly inspectable; spawn/stop are logged with pids and a stderr tail."
+            },
+            {
                 "version": "0.3.23.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.23.0/jellyfin-plugin-movienight_0.3.23.0.zip",
