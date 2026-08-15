@@ -1,0 +1,166 @@
+# Iteration Log — 2026-08-14 (the universal-pause day)
+
+Every version shipped today, what it changed, exactly what was tested, and what
+happened. Written for the "why can't we solve this" retrospective. Companion
+doc: `RESEARCH-livestreaming-prior-art.md` (how other projects do this).
+
+**The goal being chased all day:** a host-controlled pause/resume of the Movie
+Night live channel that every connected client (Jellyfin Web, Roku) survives —
+nobody frozen, nobody kicked back to the channel list, resume lands a little
+before the pause point.
+
+**The recurring villain:** every Live TV client is fed by Jellyfin's own remux
+ffmpeg (`-codec copy -copyts` reading our tuner URL). Anything that stalls,
+gaps, or timestamp-jumps our stream gets interpreted by that remux (or the
+player behind it) as "stream ended" or an unannounced discontinuity. Nearly
+every failure below is this one constraint wearing a different mask.
+
+---
+
+## Arc 1 — Morning: Phase 2 hardening (v0.3.1–0.3.3)
+
+| Ver | Change | Test | Result |
+|-----|--------|------|--------|
+| 0.3.1 | QSV filter chain: `format=nv12,hwupload` before `scale_qsv` | Real Go Live on NAS QSV | Fixed exit-218 "Impossible to convert between formats" |
+| 0.3.2 | `scale_qsv=-1:720` (QSV rejects `-2`) | Real Go Live | Fixed; broadcast played |
+| 0.3.3 | Guide refresh fired on every broadcast state change | Roku guide check | Fixed "no schedule information" (built-in refresh runs only every 24h) |
+
+Arc verdict: **basic broadcast works** — Go Live, play with audio on Web+Roku,
+natural end and Stop leave no orphans.
+
+## Arc 2 — Midday: universal pause over the HLS design (v0.3.4–0.3.15)
+
+Six spikes in sequence, each killed by a live test:
+
+- **0.3.4 — Spikes 1+2: client playstate commands.** Tested: does
+  `SessionInfo.PlayState` report for Live TV sessions; does
+  `SendPlaystateCommand` pause a real client. **Result: command not honored**
+  by real clients on tuner sessions. Client-side pause = dead end.
+- **0.3.5 — Spike 3: freeze by swapping the encoder** for a black/silent
+  source writing the same HLS filenames. **Result: broadcast stopped writing
+  segments and the stall watchdog killed it** mid-test; stderr wasn't even
+  captured on that path. Kill-and-respawn cold start too slow.
+- **0.3.6 — Spike 4: SIGSTOP/SIGCONT the encoder.** Mechanically froze/resumed
+  cleanly on Web and Roku, **but clients desynced badly** — traced to
+  Jellyfin's remux hop buffering differently per client. Dead end.
+- **0.3.7 — Spike 5: filler-channel splice.** Background filler encoder;
+  pause splices filler segments into a hand-written served playlist with
+  `EXT-X-DISCONTINUITY`; resume respawns the movie near the pause point.
+  **Result: failed live** — filler spawned on demand left a few seconds' gap
+  with no new segments; Jellyfin's remux treated the stalled playlist as
+  stream-end and exited cleanly; both Web and Roku kicked to channel list.
+- **0.3.8 — pre-warm the filler** (runs continuously from Go Live).
+  **Pause now held cleanly on Web + Roku.** Resume broke next.
+- **0.3.9 → 0.3.13 — five iterations on resume** (splice timer not
+  restarted; a dual-trigger race writing the same segment file — confirmed via
+  repeated IOException on segment_055.ts; an A/B rollback 0.3.10→0.3.9→0.3.10
+  isolating a pause regression; keeping the filler live through the new
+  encoder's warm-up; grace windows on teardown). Each fixed one failure and
+  live-testing exposed the next. Copy-based splicing kept generating
+  file-locking and teardown races.
+- **0.3.14 — Spike 6: pointer model, no copying.** Each encoder writes its own
+  prefix in its own directory; the served playlist just points at filenames;
+  the movie encoder is left running across pause. Removed the whole
+  IOException bug class.
+- **0.3.15 — served playlist owned from Go Live** (fixed a dual-writer
+  collision between ffmpeg's own live playlist and our hand-written one —
+  clients flip-flopped between paused-filler and live-movie).
+
+Arc verdict: **pause worked; resume was never observed working end-to-end**
+across the splice boundary — and (established later, at 18:37) even the
+"working" pause only worked for clients that *joined during* the pause. A
+client watching **across** the splice freezes, because our
+`EXT-X-DISCONTINUITY` marker does not survive Jellyfin's remux: the remux
+copies the raw timestamp cliff downstream with no signal, and the player
+stalls. This is architectural, not a bug in the splicing.
+
+## Arc 3 — Afternoon: the 25fps mystery (v0.3.16–0.3.22)
+
+What looked like a return of the race turned out to be a day-old latent bug:
+
+- **0.3.16 / 0.3.17** — the two architecture spikes were built (raw-TS channel,
+  zmq switcher channel) but *not yet exercised*.
+- **0.3.18** — self-service config page (Go Live/Stop/Pause/Resume buttons,
+  spike toggles). Minutes later a **double-Go-Live race** hit live (button gave
+  no in-flight feedback → double click → two ffmpegs stomping one directory).
+- **0.3.19** — atomic state claim + button debounce. Race genuinely fixed
+  (the "ignoring" guard observed firing) — **but the 30s Go Live timeouts kept
+  happening**, which meant the race had been misdiagnosed as their cause.
+- **Investigation (0.3.20 instrumentation):** stderr head capture + an
+  `encoder-dirs` debug endpoint. Live polling during a failing Go Live proved
+  the output directory stays **completely empty for the whole 30s** while
+  ffmpeg encodes at full speed — write-side stall, not detection failure.
+  Controlled A/B via the API: two different 25fps files failed 100%
+  (7 attempts); 24fps and 29.97fps files went live in ~10s every time. Same
+  exact command with software x264 on a laptop: all files fine.
+- **0.3.21 — encode-probe endpoint** (run any ffmpeg arg list on the NAS for
+  N seconds, report files+stderr; ~15s per experiment instead of a
+  release-restart cycle). Bisection matrix on the failing file:
+  baseline QSV → 0 files; QSV minus audio → 0 files (kills interleave
+  theories); QSV → plain mpegts → 6 MB (encoder fine); software x264 → HLS →
+  clean segments (muxer fine); QSV **minus `-force_key_frames`** → segments
+  immediately ← the answer; QSV with fkf plus `-g 50` → still 0.
+- **0.3.22 — THE FIX:** `-force_key_frames expr` wedges h264_qsv on this
+  iHD driver — with it, 25fps sources emit **no keyframe-flagged packets at
+  all**, so the HLS muxer never opens a segment file. 24/29.97fps sources only
+  limped through via a driver IDR near frame ~250 (why every "successful"
+  Go Live took 10+ s). QSV now uses `-g 100 -forced_idr 1`. **Verified: the
+  7-time-failing file went Live in 5s**; a real movie (AC3 5.1, 23.98fps,
+  feature length) in 7s.
+
+Also fixed en route: tuner registered with `TunerCount=1`, so one frozen
+client session blocked every other tune with "M3U simultaneous stream limit
+reached" → now 0 (unlimited) (v0.3.23).
+
+## Arc 4 — Evening: the single-process switcher (v0.3.23–0.3.25)
+
+- **Switcher spike as shipped (zmq) could never start:** jellyfin-ffmpeg is
+  built **without libzmq** ("No such filter: 'zmq'", proven via encode-probe).
+- **0.3.23 —** control channel replaced with ffmpeg's interactive **stdin**
+  protocol (`c` + `streamselect -1 map N`), verified locally (frame-inspected
+  color change, reply ret:0). On the NAS: channel tuned and played (proving
+  **raw MPEG-TS through the tuner works** — spike #8 answered), but switches
+  didn't take effect and there was zero visibility into why.
+- **0.3.24 —** commands broadcast to every live switcher process + per-process
+  stderr captured into the API response. **Result: blue → maroon → green
+  switched live** through Jellyfin's remux into a real client, `ret:0` replies
+  visible, zero seams. **Single-process switching validated end-to-end.**
+- **0.3.25 — switcher v2, real content.** Movie enters via a restartable QSV
+  *feeder* into a persistent local feed URL (feed.ts holds the connection open
+  across feeder swaps so the switcher input stalls but never EOFs);
+  `streamselect`+`astreamselect` switch movie ↔ pause card (quiet tone);
+  pause logs the wall-clock movie position and kills the feeder; resume
+  respawns it at pausedAt−10s. **Tested live:** movie played through the
+  two-stage pipeline ✓; pause cut to the card with the same client session
+  surviving ✓ (something the HLS design never achieved); pause position
+  58.2s → resume feeder at 48.2s ✓; ffmpeg's input-discontinuity compensation
+  **healed the feeder swap automatically** ✓. **But:** during the pause the
+  switcher's *output* froze — multi-input filters (`streamselect` rides
+  framesync) wait for frames on **all** inputs, so the starved feed input
+  stalled the whole graph; the card never aired, the remux timed out, client
+  kicked. Separately the x264 re-encode ran at 0.55x realtime on this
+  swap-loaded box (30→17 fps decline) — the double encode is too heavy as
+  configured.
+
+## Where that leaves the architecture
+
+Proven building blocks:
+1. Raw continuous MPEG-TS through Jellyfin's M3U tuner: **works**.
+2. One persistent encoder surviving an input source being killed and
+   respawned at a different position (timestamp cliff auto-healed): **works**.
+3. Live switching inside one ffmpeg via stdin commands: **works** — but only
+   while all inputs keep delivering frames.
+4. Pause/resume position bookkeeping (wall-clock, rewind-on-resume): trivial,
+   **works**.
+
+The two open problems, precisely:
+1. A multi-input filter graph stalls when the "paused" input stops delivering
+   → candidate fix: switch at the **feed layer** instead (persistent encoder
+   has ONE input; the plugin swaps which upstream — movie feeder or looping
+   card feeder — flows through it). Uses only proven blocks 1+2.
+2. Double-encode cost (feeder + persistent encoder both encoding) on an
+   8GB/4-core NAS already deep in swap → needs a perf pass (QSV for the
+   persistent encoder, cheaper mezzanine, or single-encode designs).
+
+See `RESEARCH-livestreaming-prior-art.md` for how existing projects handle
+(and mostly avoid) these exact problems.
