@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.27.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.27.0/jellyfin-plugin-movienight_0.3.27.0.zip",
+                "checksum": "8cb5abd29226da70d4d1b56781bcecd0",
+                "timestamp": "2026-08-15T16:29:31Z",
+                "changelog": "Switcher v3 fix from the first live test (which otherwise WORKED - movie played through the full feeder/persistent-encoder pipeline): the movie feeder now starts lazily when the feed gains its first consumer, instead of at configure time. An eagerly-started feeder built minutes of backlog before anyone tuned, then burst through the pipeline at 1.7x, leaving every downstream buffer minutes deep - pause/resume switches existed in the stream but took ages to reach the playhead, and the first tune spent 21s probing through the surge."
+            },
+            {
                 "version": "0.3.26.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.26.0/jellyfin-plugin-movienight_0.3.26.0.zip",

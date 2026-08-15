@@ -151,6 +151,9 @@ public class MovieNightController : ControllerBase
                 var feeder = _broadcastManager.GetSw2FeederProcess();
                 if (feeder is null)
                 {
+                    // Lazy feeder start: the movie only begins being consumed once the feed has an
+                    // actual consumer (this loop), so no backlog ever builds up ahead of demand.
+                    _broadcastManager.EnsureSw2FeederStarted();
                     await Task.Delay(300, cancellationToken).ConfigureAwait(false);
                     continue;
                 }

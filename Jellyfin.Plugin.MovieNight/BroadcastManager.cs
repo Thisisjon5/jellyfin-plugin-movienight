@@ -67,6 +67,7 @@ public sealed class BroadcastManager : IDisposable
     private double _sw2FeederStartSeconds;
     private DateTime? _sw2FeederStartedUtc;
     private bool _sw2Paused;
+    private bool _sw2FeederPending;
     private Process? _sw2FeederProcess;
     private StderrTailBuffer? _sw2FeederStderr;
     private Process? _sw2SlateProcess;
@@ -1311,8 +1312,48 @@ public sealed class BroadcastManager : IDisposable
 
         KillSw2Feeder(oldFeeder);
         KillSw2Feeder(oldSlate);
-        StartSw2Feeder(0);
-        _logger.LogInformation("Movie Night: switcher v2 configured for {Path}", itemPath);
+
+        // The feeder does NOT start here - it starts lazily when the feed actually gains a
+        // consumer (see EnsureSw2FeederStarted, called from the controller's feed.ts loop).
+        // Starting it eagerly was a real bug found live 2026-08-15: a feeder running minutes
+        // before anyone tuned built up a backlog that then BURST through the whole pipeline at
+        // >1.7x, leaving every downstream buffer minutes deep - pause/resume switches took ages
+        // to become visible, and the first tune's probe took 21s chewing through it.
+        lock (_lock)
+        {
+            _sw2FeederPending = true;
+            _sw2FeederStartSeconds = 0;
+            _sw2FeederStartedUtc = null;
+        }
+
+        _logger.LogInformation("Movie Night: switcher v2 configured for {Path} (feeder starts on first consumption)", itemPath);
+    }
+
+    /// <summary>
+    /// SWITCHER V2: starts the movie feeder on demand, the first time the feed actually has a
+    /// consumer. Called from the controller's feed.ts copy loop whenever it finds no live feeder.
+    /// No-op unless a session is configured, unpaused, and the feeder hasn't started yet.
+    /// </summary>
+    public void EnsureSw2FeederStarted()
+    {
+        double startAt;
+        lock (_lock)
+        {
+            if (!_sw2FeederPending || _sw2Paused || _sw2MoviePath is null)
+            {
+                return;
+            }
+
+            if (_sw2FeederProcess is not null && !_sw2FeederProcess.HasExited)
+            {
+                return;
+            }
+
+            _sw2FeederPending = false;
+            startAt = _sw2FeederStartSeconds;
+        }
+
+        StartSw2Feeder(startAt);
     }
 
     /// <summary>
