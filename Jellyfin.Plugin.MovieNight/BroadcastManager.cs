@@ -1464,6 +1464,79 @@ public sealed class BroadcastManager : IDisposable
     public void RefreshChannelsGuide() => TriggerGuideRefresh();
 
     /// <summary>
+    /// Diagnostic encode probe (added 2026-08-14 for the 25fps Go Live stall): runs ffmpeg with a
+    /// caller-supplied argument list into a scratch directory for a fixed number of seconds, kills
+    /// it, and reports what files appeared plus the full stderr. Lets the stall be bisected live
+    /// (no audio? different interleave delta? software vs QSV?) without a release-and-restart
+    /// cycle per experiment. Completely independent of broadcast state - uses its own directory
+    /// and never touches <see cref="_process"/>.
+    /// </summary>
+    /// <param name="args">Full ffmpeg argument list. The placeholder <c>{out}</c> in any argument
+    /// is replaced with the scratch directory path.</param>
+    /// <param name="seconds">How long to let ffmpeg run before killing it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Files created (name, size) and the stderr text (head + tail).</returns>
+    public async Task<object> RunEncodeProbeAsync(IReadOnlyList<string> args, int seconds, CancellationToken cancellationToken)
+    {
+        var probeDir = Path.Combine(_configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "probe");
+        CleanDirectory(probeDir);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg.Replace("{out}", probeDir, StringComparison.Ordinal));
+        }
+
+        using var process = new Process { StartInfo = startInfo };
+        var stderr = new StderrTailBuffer();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                stderr.Add(e.Data);
+            }
+        };
+
+        process.Start();
+        process.BeginErrorReadLine();
+
+        var exited = false;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(seconds));
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            exited = true;
+        }
+        catch (OperationCanceledException)
+        {
+            await TryKillDirectlyAsync(process).ConfigureAwait(false);
+        }
+
+        var files = Directory.Exists(probeDir)
+            ? Directory.EnumerateFiles(probeDir)
+                .Select(f => new FileInfo(f))
+                .OrderBy(f => f.Name, StringComparer.Ordinal)
+                .Select(f => (object)new { f.Name, f.Length })
+                .ToArray()
+            : Array.Empty<object>();
+
+        return new
+        {
+            ExitedOnItsOwn = exited,
+            ExitCode = exited ? SafeGetExitCode(process) : (int?)null,
+            Files = files,
+            Stderr = stderr.ToString(),
+        };
+    }
+
+    /// <summary>
     /// Diagnostic snapshot of every encoder output directory (added 2026-08-14 for the 25fps Go
     /// Live stall): the NAS container's /tmp is unreachable from outside, so this is the only way
     /// to see whether ffmpeg is actually writing segments while a broadcast is Starting. Read via

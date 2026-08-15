@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.21.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.21.0/jellyfin-plugin-movienight_0.3.21.0.zip",
+                "checksum": "1c25bc9d9d803550a2d7a31f8c4d4f4d",
+                "timestamp": "2026-08-15T00:19:25Z",
+                "changelog": "Adds POST /MovieNight/api/debug/encode-probe: runs ffmpeg with a caller-supplied argument list into an isolated scratch directory for N seconds and returns the files created plus full stderr - lets the 25fps Go Live stall be bisected live in ~15s per experiment instead of a release-and-restart cycle each."
+            },
+            {
                 "version": "0.3.20.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.20.0/jellyfin-plugin-movienight_0.3.20.0.zip",

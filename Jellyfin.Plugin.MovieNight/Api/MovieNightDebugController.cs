@@ -107,4 +107,27 @@ public class MovieNightDebugController : ControllerBase
     /// <returns>Per-directory existence plus file names, sizes, and last-write times.</returns>
     [HttpGet("encoder-dirs")]
     public ActionResult GetEncoderDirs() => Ok(_broadcastManager.DescribeOutputDirectories());
+
+    /// <summary>
+    /// Diagnostic encode probe (added 2026-08-14 for the 25fps Go Live stall - see
+    /// BroadcastManager.RunEncodeProbeAsync): runs ffmpeg with the given argument list for a fixed
+    /// number of seconds into a scratch directory, then reports files created + full stderr.
+    /// Admin-only, isolated from broadcast state. Use "{out}" in args as the output directory
+    /// placeholder.
+    /// </summary>
+    /// <param name="request">Argument list and duration.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Files created and stderr text.</returns>
+    [HttpPost("encode-probe")]
+    public async Task<ActionResult> EncodeProbe([FromBody] EncodeProbeRequest request, CancellationToken cancellationToken)
+    {
+        if (request.Args is null || request.Args.Count == 0)
+        {
+            return BadRequest("args required");
+        }
+
+        var seconds = Math.Clamp(request.Seconds, 1, 120);
+        var result = await _broadcastManager.RunEncodeProbeAsync(request.Args, seconds, cancellationToken).ConfigureAwait(false);
+        return Ok(result);
+    }
 }
