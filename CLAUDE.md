@@ -133,6 +133,21 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   accepts `-1`. VAAPI/software `scale`/`scale_vaapi` are unaffected (both
   accept `-2`) but are untested against real hardware — same class of bug
   could exist there, not yet exercised live.
+- **`-force_key_frames` wedges h264_qsv on this NAS — never reintroduce it on
+  the QSV branch.** With `-force_key_frames expr:...`, h264_qsv (jellyfin-ffmpeg
+  7.1.3, iHD driver) emits NO keyframe-flagged packets at all for 25fps sources,
+  so the HLS muxer never opens a single segment file and Go Live times out at
+  30s with ffmpeg encoding at full speed the whole time — the single most
+  misleading failure signature this project has produced (it was misdiagnosed
+  as a double-Go-Live race in v0.3.19; that race was real too, but the timeouts
+  were this). 24/29.97fps sources only "worked" because a driver-side IDR
+  slipped out around frame ~250 (hence every successful Go Live taking 10+
+  seconds to come up). QSV gets `-g 100 -forced_idr 1` instead (v0.3.22.0),
+  verified ~4s segments from the first seconds. Root-caused via the
+  `POST /MovieNight/api/debug/encode-probe` endpoint (v0.3.21.0) — an arbitrary
+  ffmpeg-args probe that runs into a scratch dir for N seconds and returns
+  files+stderr; use it (plus `GET .../debug/encoder-dirs`) for any future
+  encoder mystery before reaching for a release-per-experiment loop.
 - **Jellyfin's "Refresh Guide" scheduled task only runs once every 24h by
   default** (`IntervalTicks: 864000000000` = exactly 1 day, confirmed via
   `ApiClient.getScheduledTasks()`) — a guide-based client (Roku) showed "no
