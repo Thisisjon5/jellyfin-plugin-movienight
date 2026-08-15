@@ -38,7 +38,6 @@ public sealed class BroadcastManager : IDisposable
     private const int SpliceTickSeconds = 2;
     private const int ResumeWarmupBufferSeconds = 30;
     private const int Sw2ResumeRewindSeconds = 10;
-    private const int Sw2ResumeWarmupSeconds = 5;
 
     private readonly object _lock = new();
     private readonly ILibraryManager _libraryManager;
@@ -70,6 +69,7 @@ public sealed class BroadcastManager : IDisposable
     private bool _sw2Paused;
     private Process? _sw2FeederProcess;
     private StderrTailBuffer? _sw2FeederStderr;
+    private Process? _sw2SlateProcess;
 
     private Process? _process;
     private Process? _fillerProcess;
@@ -1182,25 +1182,25 @@ public sealed class BroadcastManager : IDisposable
         if (moviePath is not null)
         {
             var feedUrl = FormattableString.Invariant($"http://127.0.0.1:{_sw2HttpPort}/MovieNight/stream/feed.ts");
+
+            // V3 shape (2026-08-15, from RESEARCH-livestreaming-prior-art.md): ONE input. The
+            // v0.3.25 multi-input streamselect graph stalled the whole pipeline whenever the feed
+            // input starved (documented framesync behavior) - the pause card never aired. Now the
+            // PLUGIN switches what flows through the feed (movie feeder vs slate feeder), and this
+            // persistent process just re-encodes whatever arrives, erasing the seams. QSV, not
+            // x264: the software re-encode ran at 0.55x realtime; dual-QSV validated at full
+            // realtime via encode-probe. The feed input stalls briefly (1-3s) during a feeder
+            // swap but never EOFs - the controller's feed.ts holds the connection open. genpts
+            // because each new feeder starts a fresh mpegts timeline; ffmpeg's input
+            // discontinuity compensation was observed healing the jump in the v0.3.25 test.
             return new List<string>
             {
-                // The feed input stalls (no bytes, no EOF) while the feeder is being restarted at
-                // a new position - the controller's feed.ts endpoint holds the connection open
-                // across feeder swaps precisely so this input never terminates. genpts because
-                // each new feeder starts a fresh mpegts timeline.
                 "-fflags", "+genpts", "-i", feedUrl,
-                "-re", "-f", "lavfi", "-i", "color=c=darkslategray:s=1280x720:r=30",
-                "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=44100",
-                "-filter_complex",
-                "[0:v]fps=30,scale=1280:720,format=yuv420p[mv];" +
-                "[1:v]format=yuv420p[pv];" +
-                "[0:a]aresample=44100:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo[ma];" +
-                "[2:a]aresample=44100,volume=0.15,aformat=sample_fmts=fltp:channel_layouts=stereo[pa];" +
-                "[mv][pv]streamselect=inputs=2:map=0[vout];" +
-                "[ma][pa]astreamselect=inputs=2:map=0[aout]",
-                "-map", "[vout]", "-map", "[aout]",
-                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
-                "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                "-init_hw_device", "qsv=hw", "-filter_hw_device", "hw",
+                "-c:v", "h264_qsv", "-preset", "veryfast",
+                "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-1:720",
+                "-profile:v", "high", "-level", "4.0", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                "-g", "100", "-forced_idr", "1",
                 "-c:a", "aac", "-b:a", "96k", "-ac", "2",
                 "-f", "mpegts",
                 "pipe:1",
@@ -1297,16 +1297,20 @@ public sealed class BroadcastManager : IDisposable
     public void ConfigureSwitcherV2(string itemPath, int httpPort)
     {
         Process? oldFeeder;
+        Process? oldSlate;
         lock (_lock)
         {
             oldFeeder = _sw2FeederProcess;
+            oldSlate = _sw2SlateProcess;
             _sw2FeederProcess = null;
+            _sw2SlateProcess = null;
             _sw2MoviePath = itemPath;
             _sw2HttpPort = httpPort;
             _sw2Paused = false;
         }
 
         KillSw2Feeder(oldFeeder);
+        KillSw2Feeder(oldSlate);
         StartSw2Feeder(0);
         _logger.LogInformation("Movie Night: switcher v2 configured for {Path}", itemPath);
     }
@@ -1318,10 +1322,13 @@ public sealed class BroadcastManager : IDisposable
     public void ClearSwitcherV2()
     {
         Process? oldFeeder;
+        Process? oldSlate;
         lock (_lock)
         {
             oldFeeder = _sw2FeederProcess;
+            oldSlate = _sw2SlateProcess;
             _sw2FeederProcess = null;
+            _sw2SlateProcess = null;
             _sw2MoviePath = null;
             _sw2Paused = false;
             _sw2FeederStartSeconds = 0;
@@ -1329,6 +1336,7 @@ public sealed class BroadcastManager : IDisposable
         }
 
         KillSw2Feeder(oldFeeder);
+        KillSw2Feeder(oldSlate);
         _logger.LogInformation("Movie Night: switcher v2 cleared");
     }
 
@@ -1337,9 +1345,8 @@ public sealed class BroadcastManager : IDisposable
     /// the same wall-clock ruling as the HLS design), switches BOTH selects to the pause card, and
     /// kills the feeder so the movie stops being consumed while paused.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Success plus the logged pause position (or a diagnostic).</returns>
-    public async Task<(bool Success, string Output)> PauseSwitcherV2Async(CancellationToken cancellationToken)
+    public Task<(bool Success, string Output)> PauseSwitcherV2Async()
     {
         Process? feeder;
         double pausedAt;
@@ -1347,7 +1354,7 @@ public sealed class BroadcastManager : IDisposable
         {
             if (_sw2MoviePath is null || _sw2Paused)
             {
-                return (false, "No switcher v2 session, or already paused");
+                return Task.FromResult((false, "No switcher v2 session, or already paused"));
             }
 
             pausedAt = _sw2FeederStartSeconds + (_sw2FeederStartedUtc is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0);
@@ -1358,10 +1365,13 @@ public sealed class BroadcastManager : IDisposable
             _sw2FeederProcess = null;
         }
 
-        var (sent, output) = await SendSwitcherSpikeCommandAsync(1, cancellationToken).ConfigureAwait(false);
+        // V3: pause is a FEED swap, not a filter command - start the slate feeder (feed.ts picks
+        // it up the moment the movie feeder's stream ends), then kill the movie feeder so the
+        // movie stops being consumed. The persistent encoder never notices anything happened.
+        StartSw2SlateFeeder();
         KillSw2Feeder(feeder);
         _logger.LogInformation("Movie Night: switcher v2 paused at {Position:F1}s", pausedAt);
-        return (sent, FormattableString.Invariant($"paused at {pausedAt:F1}s\n{output}"));
+        return Task.FromResult((true, FormattableString.Invariant($"paused at {pausedAt:F1}s")));
     }
 
     /// <summary>
@@ -1370,35 +1380,36 @@ public sealed class BroadcastManager : IDisposable
     /// seconds to warm so the switcher's stalled feed input has fresh data, then switches both
     /// selects back to the movie.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Success plus the resume position (or a diagnostic).</returns>
-    public async Task<(bool Success, string Output)> ResumeSwitcherV2Async(CancellationToken cancellationToken)
+    public Task<(bool Success, string Output)> ResumeSwitcherV2Async()
     {
         double resumeAt;
+        Process? slate;
         lock (_lock)
         {
             if (_sw2MoviePath is null || !_sw2Paused)
             {
-                return (false, "No switcher v2 session, or not paused");
+                return Task.FromResult((false, "No switcher v2 session, or not paused"));
             }
 
             resumeAt = Math.Max(0, _sw2FeederStartSeconds - Sw2ResumeRewindSeconds);
         }
 
+        // V3: resume is the reverse feed swap - start the movie feeder a little before the
+        // logged pause position (Jon's ruling), flip state so feed.ts serves it, kill the slate.
+        // The brief no-bytes gap while the movie feeder initializes (~1-3s of QSV startup) just
+        // stalls the persistent encoder's input momentarily; nothing downstream times out.
         StartSw2Feeder(resumeAt);
-
-        // Let the fresh feeder push real data into the switcher's stalled feed input before
-        // cutting to it - the pause card keeps showing during this, so nothing is user-visible.
-        await Task.Delay(TimeSpan.FromSeconds(Sw2ResumeWarmupSeconds), cancellationToken).ConfigureAwait(false);
-
-        var (sent, output) = await SendSwitcherSpikeCommandAsync(0, cancellationToken).ConfigureAwait(false);
         lock (_lock)
         {
             _sw2Paused = false;
+            slate = _sw2SlateProcess;
+            _sw2SlateProcess = null;
         }
 
+        KillSw2Feeder(slate);
         _logger.LogInformation("Movie Night: switcher v2 resumed from {Position:F1}s", resumeAt);
-        return (sent, FormattableString.Invariant($"resumed from {resumeAt:F1}s\n{output}"));
+        return Task.FromResult((true, FormattableString.Invariant($"resumed from {resumeAt:F1}s")));
     }
 
     /// <summary>
@@ -1416,21 +1427,24 @@ public sealed class BroadcastManager : IDisposable
                 Paused = _sw2Paused,
                 PositionSeconds = Math.Round(position, 1),
                 FeederAlive = _sw2FeederProcess is not null && !_sw2FeederProcess.HasExited,
+                SlateAlive = _sw2SlateProcess is not null && !_sw2SlateProcess.HasExited,
                 SwitcherProcessCount = _switcherSpikeProcesses.Count,
             };
         }
     }
 
     /// <summary>
-    /// SWITCHER V2: the current feeder process, for the controller's feed.ts copy loop. May change
-    /// between calls (resume swaps feeders) - the copy loop re-fetches after each stream ends.
+    /// SWITCHER V2: the process currently feeding the channel - the slate feeder while paused,
+    /// the movie feeder otherwise. Used by the controller's feed.ts copy loop, which re-fetches
+    /// after each stream ends, so pause/resume swaps are picked up automatically.
     /// </summary>
     /// <returns>The live feeder process, or <c>null</c> if none is running right now.</returns>
     public Process? GetSw2FeederProcess()
     {
         lock (_lock)
         {
-            return _sw2FeederProcess is not null && !_sw2FeederProcess.HasExited ? _sw2FeederProcess : null;
+            var current = _sw2Paused ? _sw2SlateProcess : _sw2FeederProcess;
+            return current is not null && !current.HasExited ? current : null;
         }
     }
 
@@ -1514,6 +1528,61 @@ public sealed class BroadcastManager : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Movie Night: switcher v2 - failed to start feeder");
+        }
+    }
+
+    /// <summary>
+    /// SWITCHER V2/V3: the pause slate - a looping card with quiet tone, cheap software encode
+    /// (static frame ≈ zero CPU; the two QSV sessions stay reserved for movie feeder + persistent
+    /// encoder). Explicit yuv420p so the downstream QSV decode never sees 4:4:4. This is the
+    /// placeholder for the real pause asset (Jon's ruling: quiet or gentle music; asset is
+    /// swappable without architecture change).
+    /// </summary>
+    private void StartSw2SlateFeeder()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in new[]
+        {
+            "-re", "-f", "lavfi", "-i", "color=c=darkslategray:s=1280x720:r=30",
+            "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=44100",
+            "-filter:a", "volume=0.15",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+            "-b:v", "1000k", "-maxrate", "1000k", "-bufsize", "2000k", "-g", "60",
+            "-c:a", "aac", "-b:a", "96k", "-ac", "2",
+            "-f", "mpegts", "pipe:1",
+        })
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        try
+        {
+            var process = new Process { StartInfo = startInfo };
+
+            // Drain stderr (discard) - an undrained pipe fills at ~64KB and blocks ffmpeg, which
+            // for a slate that can run for a long pause would freeze the feed mid-pause.
+            process.ErrorDataReceived += (_, _) => { };
+            process.Start();
+            process.BeginErrorReadLine();
+
+            lock (_lock)
+            {
+                _sw2SlateProcess = process;
+            }
+
+            _logger.LogInformation("Movie Night: switcher v2 slate feeder pid {Pid} started", process.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night: switcher v2 - failed to start slate feeder");
         }
     }
 
@@ -2039,6 +2108,8 @@ public sealed class BroadcastManager : IDisposable
             _switcherSpikeProcesses.Clear();
             _sw2FeederProcess?.Dispose();
             _sw2FeederProcess = null;
+            _sw2SlateProcess?.Dispose();
+            _sw2SlateProcess = null;
         }
     }
 

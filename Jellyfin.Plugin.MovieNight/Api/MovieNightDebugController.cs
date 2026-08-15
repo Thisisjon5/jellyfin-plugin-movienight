@@ -137,23 +137,21 @@ public class MovieNightDebugController : ControllerBase
         return Ok(new { item.Path });
     }
 
-    /// <summary>SWITCHER V2: pause - logs movie position, cuts to the pause card, stops the feeder.</summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>200/409 with the position and per-process command echoes.</returns>
+    /// <summary>SWITCHER V2: pause - logs movie position, swaps the feed to the slate, stops the movie feeder.</summary>
+    /// <returns>200/409 with the position.</returns>
     [HttpPost("sw2/pause")]
-    public async Task<ActionResult> Sw2Pause(CancellationToken cancellationToken)
+    public async Task<ActionResult> Sw2Pause()
     {
-        var (success, output) = await _broadcastManager.PauseSwitcherV2Async(cancellationToken).ConfigureAwait(false);
+        var (success, output) = await _broadcastManager.PauseSwitcherV2Async().ConfigureAwait(false);
         return success ? Ok(output) : Conflict(output);
     }
 
-    /// <summary>SWITCHER V2: resume - feeder restarts a little before the pause position, then cuts back.</summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>200/409 with the resume position and per-process command echoes.</returns>
+    /// <summary>SWITCHER V2: resume - movie feeder restarts a little before the pause position, feed swaps back.</summary>
+    /// <returns>200/409 with the resume position.</returns>
     [HttpPost("sw2/resume")]
-    public async Task<ActionResult> Sw2Resume(CancellationToken cancellationToken)
+    public async Task<ActionResult> Sw2Resume()
     {
-        var (success, output) = await _broadcastManager.ResumeSwitcherV2Async(cancellationToken).ConfigureAwait(false);
+        var (success, output) = await _broadcastManager.ResumeSwitcherV2Async().ConfigureAwait(false);
         return success ? Ok(output) : Conflict(output);
     }
 

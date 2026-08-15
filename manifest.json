@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.26.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.26.0/jellyfin-plugin-movienight_0.3.26.0.zip",
+                "checksum": "b9bffecfb31ee70bcea06c061ae02538",
+                "timestamp": "2026-08-15T16:00:41Z",
+                "changelog": "Switcher v3: the research-validated single-input architecture (see planning/RESEARCH-livestreaming-prior-art.md). The persistent per-channel encoder now has exactly ONE input (the local feed URL) and re-encodes via QSV (dual-QSV realtime capacity validated by probe; v0.3.25's software re-encode ran at half realtime). Pause and resume are pure FEED swaps managed by the plugin - pause starts a looping slate feeder (quiet tone placeholder) and kills the movie feeder; resume restarts the movie feeder 10s before the logged position and kills the slate. The streamselect/astreamselect multi-input graph and its stdin switching commands are gone from the v2 path - v0.3.25 proved a multi-input graph stalls the whole pipeline when the paused input starves (documented ffmpeg framesync behavior). The feed never stops flowing, the persistent encoder never restarts, and no client should ever see a seam."
+            },
+            {
                 "version": "0.3.25.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.25.0/jellyfin-plugin-movienight_0.3.25.0.zip",
