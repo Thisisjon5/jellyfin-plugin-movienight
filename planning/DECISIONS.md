@@ -463,3 +463,25 @@ closest open-source analog to the single-process-switcher pattern and is
 still unread in depth (flagged in the prior entry, still true). Reading its
 splice/switch internals before finalizing the spec requires an agent with
 web/repo-fetch access, not available in this conversation.
+
+## 2026-08-14 (evening) — switcher architecture validated; resume + pause-card rulings
+
+- **Switcher spike PASSED end-to-end** (v0.3.24.0): one continuous ffmpeg, raw MPEG-TS
+  down the tuner, live input switching via ffmpeg's stdin command protocol
+  (`c` + `streamselect -1 map N`) — blue→maroon→green switched live through
+  Jellyfin's remux into a real client with zero seams. zmq is unavailable
+  (jellyfin-ffmpeg built without libzmq) — stdin is the control channel.
+- **RULING (Jon): resume must return to the movie's logged timestamp** (or a
+  little before it). Teardown-and-rewarm of the movie source is acceptable if
+  required. Implied design: the movie enters the switcher via a restartable
+  FEEDER process (switcher itself never restarts, so viewers never see a seam);
+  pause logs elapsed time, resume restarts the feeder at pausedAt−rewind and
+  switches back when warm.
+- **RULING (Jon): pause audio is quiet or gentle music.** Static-card-vs-short-loop
+  is left open as an asset decision — architecturally identical (pause input is a
+  `-stream_loop -1` file with its own audio, audio switched via `astreamselect`
+  together with video). Placeholder acceptable for the next spike.
+- Per-viewer-process question likely moot: Jellyfin's tuner shares one upstream
+  connection across clients (`AllowStreamSharing`, "consumer count is now 2"
+  observed live) — one encoder, Jellyfin fans out. Verify pid count stays 1 with
+  a second real client when convenient.
