@@ -60,7 +60,26 @@ public static class FfmpegCommandBuilder
         AddVideoArgs(args, accel, vaapiDevice);
 
         args.AddRange(["-c:a", "aac", "-b:a", "96k", "-ac", "2"]);
-        args.AddRange(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+
+        // Keyframe cadence, so the HLS muxer has boundaries to cut segments at. QSV MUST NOT get
+        // -force_key_frames: on this NAS's real hardware (jellyfin-ffmpeg 7.1.3, iHD driver), the
+        // expr form makes h264_qsv emit NO keyframe-flagged packets at all for 25fps sources - the
+        // hls muxer then never opens a single segment file and every Go Live times out at 30s
+        // (root-caused 2026-08-14 via live encode-probe bisection: same file + same args minus
+        // force_key_frames = segments immediately; adding it back = zero bytes ever, even with -g).
+        // 24/29.97fps sources only "worked" because a driver-side IDR slipped out around frame
+        // ~250, which is also why every successful Go Live took 10+ seconds to come up. An
+        // explicit GOP plus forced_idr (a QSV-private option promoting I to IDR) gives immediate,
+        // regular keyframes: verified ~4s segments from the first seconds of the encode.
+        if (accel == HardwareAccel.Qsv)
+        {
+            args.AddRange(["-g", "100", "-forced_idr", "1"]);
+        }
+        else
+        {
+            args.AddRange(["-force_key_frames", "expr:gte(t,n_forced*2)"]);
+        }
+
         args.AddRange([
             "-f", "hls",
             "-hls_time", "4",

@@ -23,6 +23,28 @@ public class FfmpegCommandBuilderTests
     }
 
     [Fact]
+    public void Build_Qsv_UsesExplicitGopInsteadOfForceKeyFrames()
+    {
+        // -force_key_frames wedges h264_qsv on real hardware (no keyframe-flagged packets at all
+        // for 25fps sources -> hls muxer never writes a segment -> Go Live times out); QSV gets
+        // an explicit GOP + forced_idr instead. See the comment in Build().
+        var args = FfmpegCommandBuilder.Build("/movies/foo.mkv", "/tmp/hls", HardwareAccel.Qsv);
+        var joined = string.Join(' ', args);
+
+        Assert.DoesNotContain("-force_key_frames", args);
+        Assert.Contains("-g 100 -forced_idr 1", joined);
+    }
+
+    [Fact]
+    public void Build_NonQsv_KeepsForceKeyFrames()
+    {
+        var args = FfmpegCommandBuilder.Build("/movies/foo.mkv", "/tmp/hls", HardwareAccel.None);
+
+        Assert.Contains("-force_key_frames", args);
+        Assert.DoesNotContain("-forced_idr", args);
+    }
+
+    [Fact]
     public void Build_Vaapi_WithDevice_UsesVaapiEncoder()
     {
         var args = FfmpegCommandBuilder.Build("/movies/foo.mkv", "/tmp/hls", HardwareAccel.Vaapi, "/dev/dri/renderD128");
