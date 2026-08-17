@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.29.0"
+version: "0.3.30.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,21 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.30.0: Soak-readiness release (roadmap step 2 prep). Two changes, both
+  found by tracing failure points before the movie-length soak rather than
+  during it: (1) natural movie end is now handled - previously a movie
+  playing to its credits left the feed silently stalled (the copy loop spun
+  at 300ms with the feeder dead and the pending-flag correctly preventing a
+  respawn, but nothing told anyone) and every client froze on the last
+  frame until a manual Stop; now the copy loop notifies BroadcastManager
+  when a source ends, and if the ended process is still the registered
+  movie feeder (i.e. no pause/resume swap explains the EOF) the session
+  auto-pauses onto the slate - "movie over" looks intentional, Stop remains
+  the explicit close, and Resume replays the ending. (2) a once-a-minute
+  feed.ts heartbeat log line (pid, seconds into stretch, bytes copied,
+  effective kbps) - the server-side drift detector for the soak: a feeder
+  pacing off realtime shows up in the bitrate curve long before a bad
+  resume position would reveal it.
   0.3.29.0: Roadmap step 1 (planning/ROADMAP-2026-08-16.md, ruled after the
   v0.3.28 acceptance test PASSED universal pause/resume on Web + Roku): the
   config page's Go Live / Pause-Resume / Stop buttons and status readout now

@@ -1449,6 +1449,31 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
+    /// SWITCHER V2: called by the feed.ts copy loop when a source stream ended. Only acts on a
+    /// NATURAL movie end - session live, not paused, and the ended process still registered as
+    /// the current movie feeder (pause/resume swaps null or replace it first, so their kills
+    /// don't match). Without this, a movie playing to its credits left the feed silently
+    /// stalled and every client frozen on the last frame until a manual Stop (found tracing
+    /// the code before the 2026-08-16 soak, not in a live failure). Auto-pausing onto the
+    /// slate makes "movie over" look intentional and keeps the session controllable - Stop
+    /// remains the explicit close, Resume replays the ending.
+    /// </summary>
+    /// <param name="feeder">The process whose stream just ended.</param>
+    public void HandleSw2FeederEnded(Process feeder)
+    {
+        lock (_lock)
+        {
+            if (_sw2MoviePath is null || _sw2Paused || !ReferenceEquals(_sw2FeederProcess, feeder))
+            {
+                return;
+            }
+        }
+
+        _logger.LogInformation("Movie Night: switcher v2 movie ended naturally - auto-pausing to slate");
+        _ = PauseSwitcherV2Async();
+    }
+
+    /// <summary>
     /// SWITCHER V2: session snapshot for the debug status endpoint.
     /// </summary>
     /// <returns>Movie path, pause state, current movie position, and process liveness.</returns>

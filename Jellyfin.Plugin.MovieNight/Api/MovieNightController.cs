@@ -165,6 +165,8 @@ public class MovieNightController : ControllerBase
 
                 long copied = 0;
                 var sourcePid = SafePid(feeder);
+                var stretchStarted = DateTime.UtcNow;
+                var lastHeartbeat = stretchStarted;
                 _logger.LogInformation("Movie Night: feed.ts copying from feeder pid {Pid}", sourcePid);
                 try
                 {
@@ -186,6 +188,22 @@ public class MovieNightController : ControllerBase
                         await HttpContext.Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                         copied += read;
 
+                        // Once-a-minute heartbeat (added for the soak test): effective bitrate per
+                        // stretch is the server-side drift detector - a feeder pacing off realtime
+                        // shows up here long before a bad resume position would reveal it.
+                        var now = DateTime.UtcNow;
+                        if ((now - lastHeartbeat).TotalSeconds >= 60)
+                        {
+                            lastHeartbeat = now;
+                            var elapsed = (now - stretchStarted).TotalSeconds;
+                            _logger.LogInformation(
+                                "Movie Night: feed.ts heartbeat - pid {Pid}, {Elapsed:F0}s into stretch, {Bytes} bytes (~{Kbps:F0} kbps)",
+                                sourcePid,
+                                elapsed,
+                                copied,
+                                copied * 8 / 1000.0 / elapsed);
+                        }
+
                         if (!ReferenceEquals(_broadcastManager.GetSw2FeederProcess(), feeder))
                         {
                             _logger.LogInformation("Movie Night: feed.ts source swapped away from pid {Pid} mid-copy", sourcePid);
@@ -199,6 +217,7 @@ public class MovieNightController : ControllerBase
                 }
 
                 _logger.LogInformation("Movie Night: feed.ts source pid {Pid} ended after {Bytes} bytes", sourcePid, copied);
+                _broadcastManager.HandleSw2FeederEnded(feeder);
                 await Task.Delay(200, cancellationToken).ConfigureAwait(false);
             }
         }
