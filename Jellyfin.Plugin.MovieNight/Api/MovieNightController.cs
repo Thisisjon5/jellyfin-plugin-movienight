@@ -149,6 +149,7 @@ public class MovieNightController : ControllerBase
 
         HttpContext.Response.ContentType = "video/mp2t";
         _logger.LogInformation("Movie Night: feed.ts consumer connected");
+        _broadcastManager.HandleSw2ConsumerConnected();
         try
         {
             while (!cancellationToken.IsCancellationRequested && _broadcastManager.IsSwitcherV2SessionActive())
@@ -227,6 +228,7 @@ public class MovieNightController : ControllerBase
         }
         finally
         {
+            _broadcastManager.HandleSw2ConsumerDisconnected();
             _logger.LogInformation("Movie Night: feed.ts consumer disconnected");
         }
     }

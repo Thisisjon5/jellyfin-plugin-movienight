@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.31.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.31.0/jellyfin-plugin-movienight_0.3.31.0.zip",
+                "checksum": "a9ca08e900b3dbfe8afb47fbfe293a48",
+                "timestamp": "2026-08-17T02:01:07Z",
+                "changelog": "Zero-viewer buffer-echo fix (mini-soak finding): feed.ts consumers are counted; when the last viewer disconnects, the feeders are killed instead of blocking on a full pipe, and the lazy-start respawns the movie feeder at the LIVE wall-clock position (or a fresh slate if paused) on the next tune. Eliminates the -re catch-up burst that left rejoining viewers ~2 minutes behind the live edge, delaying every subsequent pause/resume on their screens by the same amount."
+            },
+            {
                 "version": "0.3.30.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.30.0/jellyfin-plugin-movienight_0.3.30.0.zip",

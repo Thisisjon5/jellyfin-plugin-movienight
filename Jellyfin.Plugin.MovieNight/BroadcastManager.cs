@@ -71,6 +71,7 @@ public sealed class BroadcastManager : IDisposable
     private Process? _sw2FeederProcess;
     private StderrTailBuffer? _sw2FeederStderr;
     private Process? _sw2SlateProcess;
+    private int _sw2ConsumerCount;
 
     private Process? _process;
     private Process? _fillerProcess;
@@ -1331,24 +1332,112 @@ public sealed class BroadcastManager : IDisposable
     /// </summary>
     public void EnsureSw2FeederStarted()
     {
-        double startAt;
+        var startSlate = false;
+        double startAt = 0;
         lock (_lock)
         {
-            if (!_sw2FeederPending || _sw2Paused || _sw2MoviePath is null)
+            if (_sw2MoviePath is null)
             {
                 return;
             }
 
-            if (_sw2FeederProcess is not null && !_sw2FeederProcess.HasExited)
+            if (_sw2Paused)
             {
-                return;
-            }
+                // Zero-viewer fix (v0.3.31): the slate is killed with the movie feeder when the
+                // last consumer disconnects, so a consumer arriving mid-pause must restart it.
+                if (_sw2SlateProcess is not null && !_sw2SlateProcess.HasExited)
+                {
+                    return;
+                }
 
-            _sw2FeederPending = false;
-            startAt = _sw2FeederStartSeconds;
+                startSlate = true;
+            }
+            else
+            {
+                if (!_sw2FeederPending)
+                {
+                    return;
+                }
+
+                if (_sw2FeederProcess is not null && !_sw2FeederProcess.HasExited)
+                {
+                    return;
+                }
+
+                _sw2FeederPending = false;
+
+                // Live-channel semantics: the wall clock kept running while no feeder existed
+                // (zero-viewer gap), so respawn at the LIVE position, not where the old feeder
+                // died - a rejoining viewer lands at the live edge with no -re catch-up burst.
+                startAt = _sw2FeederStartSeconds + (_sw2FeederStartedUtc is DateTime started ? (DateTime.UtcNow - started).TotalSeconds : 0);
+            }
+        }
+
+        if (startSlate)
+        {
+            StartSw2SlateFeeder();
+            return;
         }
 
         StartSw2Feeder(startAt);
+    }
+
+    /// <summary>
+    /// SWITCHER V2: a feed.ts consumer connected (the persistent remuxer behind a tune).
+    /// </summary>
+    public void HandleSw2ConsumerConnected()
+    {
+        lock (_lock)
+        {
+            _sw2ConsumerCount++;
+        }
+    }
+
+    /// <summary>
+    /// SWITCHER V2: a feed.ts consumer disconnected. When the LAST one goes, kill the feeders -
+    /// an unconsumed ffmpeg blocks on its full stdout pipe while its -re clock keeps running,
+    /// then bursts ~3x realtime on the next consumer to catch up, landing that viewer the whole
+    /// gap-length behind the live edge (2026-08-16 mini-soak: a stable ~1:50 echo on every
+    /// subsequent transition). Killing on last-disconnect makes the existing lazy-start respawn
+    /// at the live position instead. The consumer count exists so a fast retune (new consumer
+    /// connects before the old response's teardown runs) doesn't kill the new consumer's feeder.
+    /// </summary>
+    public void HandleSw2ConsumerDisconnected()
+    {
+        Process? feeder;
+        Process? slate;
+        lock (_lock)
+        {
+            _sw2ConsumerCount = Math.Max(0, _sw2ConsumerCount - 1);
+            if (_sw2ConsumerCount > 0 || _sw2MoviePath is null)
+            {
+                return;
+            }
+
+            feeder = _sw2FeederProcess;
+            slate = _sw2SlateProcess;
+            _sw2FeederProcess = null;
+            _sw2SlateProcess = null;
+            if (feeder is not null)
+            {
+                // _sw2FeederStartSeconds/_sw2FeederStartedUtc stay untouched: position keeps
+                // advancing on the wall clock (live-channel semantics) and EnsureSw2FeederStarted
+                // computes the live edge from them at respawn time.
+                _sw2FeederPending = true;
+            }
+        }
+
+        if (feeder is null && slate is null)
+        {
+            return;
+        }
+
+        // ponytail: pause/resume issued while zero consumers are tuned still start feeders
+        // eagerly and would re-create a (short) echo; not a real movie-night flow, revisit if it
+        // ever shows up in logs.
+        KillSw2Feeder(feeder);
+        KillSw2Feeder(slate);
+        _logger.LogInformation("Movie Night: switcher v2 - last feed consumer gone, feeders stopped (will respawn at live edge on next tune)");
     }
 
     /// <summary>
