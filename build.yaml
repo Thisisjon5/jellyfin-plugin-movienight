@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.28.0"
+version: "0.3.29.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,18 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.29.0: Roadmap step 1 (planning/ROADMAP-2026-08-16.md, ruled after the
+  v0.3.28 acceptance test PASSED universal pause/resume on Web + Roku): the
+  config page's Go Live / Pause-Resume / Stop buttons and status readout now
+  drive the proven v3 switcher pipeline (the sw2 endpoints) instead of the
+  legacy HLS broadcast path, so a full golive → pause → resume → stop cycle
+  can be run from the dashboard page - including a phone browser - with no
+  curl involved. This is what the movie-length soak (roadmap step 2) will be
+  hosted through. The now-unused channel-name input is removed (the v3
+  channel is the fixed "Movie Night (switcher spike)" until the step-3
+  promotion); the page copy says which channel to tune. The legacy-path API
+  endpoints themselves are untouched - their removal is roadmap step 3,
+  gated on Jon's ruling.
   0.3.19.0: Fixes a real double-Go-Live race, found live within minutes of
   shipping the new self-service UI in 0.3.18.0 - the config page's Go Live
   button gave no "in progress" feedback while GoLiveAsync's own up-to-30s

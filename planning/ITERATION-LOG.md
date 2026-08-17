@@ -223,3 +223,36 @@ way. Open risks: does `-c copy` actually smooth the swap discontinuity
 downstream (if not: fallback is re-encode with QSV *decode+encode* or lighter
 settings); slate/movie stream-parameter matching under copy (both are 720p
 h264 + 44.1k stereo AAC by construction). See planning/HANDOFF-2026-08-15.md.
+
+## Arc 6 — 2026-08-16 evening: v0.3.28 acceptance test — PASS
+
+The gate everything waited on. Cats video (16.3 min), Jon watching Jellyfin
+Web + Roku simultaneously, plugin driven via the sw2 admin API, feed.ts
+instrumentation watched live through `/System/Logs`.
+
+- **Full script passed, two pause/resume cycles.** Both clients survived
+  every transition in the same session — no retune, no kick. Universal
+  pause/resume through Jellyfin Live TV is real.
+- **Cycle 1:** pause at 141.7s — server swap gap 0.5s (movie feeder ended
+  after 74.3MB, slate copying 0.5s later), slate + tone clean on both
+  clients. Resume at 131.7s (exactly −10s): clean on both, rewind confirmed.
+- **Cycle 2:** pause at 254.3s — position tracking airtight (matched
+  wall-clock elapsed since resume within 0.6s). Swap gap 1.4s this time;
+  clients visibly rebuffered, played out their remaining buffered movie
+  seconds, then showed slate. Rough but delivered. Resume at 244.3s: clean,
+  no buffering.
+- **Stop:** FeederAlive/SlateAlive false, SwitcherProcessCount 0 — no
+  orphans.
+- **Open findings:** (a) slate cold-start latency varies (0.5s vs 1.4s) and
+  the slower swap reads rough on clients — candidate fix: keep the slate
+  feeder warm instead of spawning per pause; (b) Roku showed periodic
+  stutter during *normal* playback both before any pause and unrelated to
+  swaps (Jon suspects packaging/buffer sizing) — investigate via this run's
+  FFmpeg.Remux/DirectStream logs before touching anything.
+
+### Where the next session starts
+
+Roadmap ruled by Jon 2026-08-16 (planning/ROADMAP-2026-08-16.md): (1) rewire
+config page to v3 → (2) movie-length soak via that page → (3) promote v3 +
+delete HLS machinery (Jon's explicit ruling gates the deletion) → (4) proper
+UI, mocks first. Step 1 begun same session.

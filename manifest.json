@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.29.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.29.0/jellyfin-plugin-movienight_0.3.29.0.zip",
+                "checksum": "fcf004d4a881649f8639c4b65c18aa6c",
+                "timestamp": "2026-08-17T00:42:01Z",
+                "changelog": "Roadmap step 1 (ruled 2026-08-16, after the v0.3.28 acceptance test PASSED universal pause/resume on Web + Roku): the config page's Go Live / Pause-Resume / Stop buttons and status readout now drive the proven v3 switcher pipeline (sw2 endpoints) instead of the legacy HLS path - a full golive/pause/resume/stop cycle runs from the dashboard page, phone browser included, no curl. The unused channel-name input is removed (the v3 channel stays 'Movie Night (switcher spike)' until the step-3 promotion). Legacy API endpoints untouched; their removal is roadmap step 3, gated on Jon's ruling."
+            },
+            {
                 "version": "0.3.28.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.28.0/jellyfin-plugin-movienight_0.3.28.0.zip",

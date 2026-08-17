@@ -11,17 +11,16 @@
                 <h2>Broadcast</h2>
                 <p>
                     Paste a movie's item ID (visible in its details page URL as
-                    <code>?id=...</code>), pick a channel name, and Go Live.
+                    <code>?id=...</code>) and Go Live, then tune
+                    <strong>"Movie Night (switcher spike)"</strong> in Live TV.
+                    Pause swaps every viewer to the slate; Resume returns the
+                    movie ~10s before the pause point. Needs the switcher spike
+                    channel enabled below.
                 </p>
 
                 <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="MovieNightItemId">Item ID</label>
                     <input id="MovieNightItemId" type="text" is="emby-input" placeholder="e.g. 8a6e5cf0-30f3-420a-a8ce-e7704d690f94" />
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="MovieNightChannelName">Channel name</label>
-                    <input id="MovieNightChannelName" type="text" is="emby-input" value="Movie Night" />
                 </div>
 
                 <div>
@@ -104,11 +103,13 @@
                     lastStatus = status;
                     document.querySelector('#MovieNightStatus').textContent = JSON.stringify(status, null, 2);
                     var pauseResumeButton = document.querySelector('#MovieNightPauseResume span');
-                    pauseResumeButton.textContent = status.IsPaused ? 'Resume' : 'Pause';
+                    pauseResumeButton.textContent = status.Paused ? 'Resume' : 'Pause';
                 }
 
                 function poll() {
-                    ApiClient.getJSON(apiUrl('status')).then(renderStatus).catch(function (err) {
+                    // Roadmap step 1 (2026-08-16): the page drives the proven v3 switcher pipeline
+                    // (sw2/*), not the legacy HLS broadcast path.
+                    ApiClient.getJSON(debugUrl('sw2/status')).then(renderStatus).catch(function (err) {
                         document.querySelector('#MovieNightStatus').textContent = 'status request failed: ' + err;
                     });
                 }
@@ -166,7 +167,6 @@
                 document.querySelector('#MovieNightGoLive').addEventListener('click', function () {
                     var button = this;
                     var itemId = document.querySelector('#MovieNightItemId').value.trim();
-                    var channelName = document.querySelector('#MovieNightChannelName').value.trim() || 'Movie Night';
                     if (!itemId) {
                         Dashboard.alert('Enter an item ID first.');
                         return;
@@ -175,9 +175,7 @@
                     withButtonDisabled(button, function () {
                         return ApiClient.ajax({
                             type: 'POST',
-                            url: apiUrl('golive'),
-                            data: JSON.stringify({ ItemId: itemId, ChannelName: channelName }),
-                            contentType: 'application/json',
+                            url: debugUrl('sw2/golive?itemId=' + encodeURIComponent(itemId)),
                         }).then(poll).catch(function () {
                             Dashboard.alert('Go Live failed - check status below and server logs.');
                             poll();
@@ -190,7 +188,7 @@
                     withButtonDisabled(button, function () {
                         return ApiClient.ajax({
                             type: 'POST',
-                            url: apiUrl('stop'),
+                            url: debugUrl('sw2/stop'),
                         }).then(poll).catch(function () {
                             poll();
                         });
@@ -199,11 +197,11 @@
 
                 document.querySelector('#MovieNightPauseResume').addEventListener('click', function () {
                     var button = this;
-                    var action = (lastStatus && lastStatus.IsPaused) ? 'resume' : 'pause';
+                    var action = (lastStatus && lastStatus.Paused) ? 'resume' : 'pause';
                     withButtonDisabled(button, function () {
                         return ApiClient.ajax({
                             type: 'POST',
-                            url: apiUrl(action),
+                            url: debugUrl('sw2/' + action),
                         }).then(poll).catch(function () {
                             Dashboard.alert(action + ' failed - check status below and server logs.');
                             poll();
