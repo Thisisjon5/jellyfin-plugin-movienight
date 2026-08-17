@@ -317,10 +317,32 @@ position clock runs while untuned (live-channel semantics) ✓; clean stop ✓.
   the same stream fine. Investigate before relying on web clients
   (Tuesday's soak can be Roku-led if unresolved).
 
+### Arc 8 addendum — the "web broken" scare, resolved (same night)
+
+Systematic elimination: NOT Jellyfin Enhanced (disabled it - still wedged;
+re-enabled after), NOT stale sessions (fresh tab, fresh page - still
+wedged), NOT transient server state (survived 5 restarts), server provably
+correct at every step. Then the reframe: ALL failing desktop tests ran in
+claude-in-chrome automated tabs; Jon testing BY HAND: **Firefox plays,
+Xbox plays** (Roku already proven). The automated-tab wedges were a test-
+rig artifact (background/automated tabs get throttled timers + different
+activation semantics). LESSON: client playback of this channel is only
+validly tested by a human on a real screen - never trust automated-tab
+playback state.
+
+The one genuine failure: **Jellyfin Android app (integrated player) +
+Live TV** - black player, 00:00/00:00 playbar, on first tune (pre-seam);
+same phone DirectPlays VOD fine, connectivity fine. Hypothesis + fix
+candidates + the settled live-edge model: ROADMAP-2026-08-16.md §1c.
+Diagnostic API notes: POST /LiveStreams/Close?liveStreamId=... (query
+form) closes a stuck tuner stream; /Sessions LastActivityDate only
+updates on API calls - an app idling on a dead player looks inactive
+while still connected (misread once tonight).
+
 ### Where the next session starts
 
 Roadmap step 2: Tuesday 2026-08-19 soak of The Creator (4-pause schedule +
-natural end). Before it: investigate the web-client readyState-0 wedge
-(above) — phone/web viewers are expected at a real movie night. Also
+natural end), Roku/Xbox/web-led; Android participates only if 1c's phone
+experiments (integrated player off / quality cap) pan out earlier. Also
 pending: Roku periodic-stutter forensics (FFmpeg session logs preserved
-from arc 7).
+from arc 7); remuxer timestamp-continuity probe (1c).
