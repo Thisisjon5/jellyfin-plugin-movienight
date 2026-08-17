@@ -292,9 +292,35 @@ ruled Tuesday asset) with Jon driving the config page and a Roku watching.
   3); NAS clock runs ~28s ahead of the laptop (use server log timestamps
   for analysis); slate steady-state ~150-180 kbps (static card, expected).
 
+## Arc 8 — 2026-08-16 night: v0.3.31 zero-viewer fix, shipped + verified
+
+Same session, Jon's "ship it now". feed.ts consumers are now counted;
+last-disconnect kills movie+slate feeders; EnsureSw2FeederStarted respawns
+the movie feeder at the wall-clock live position (or a fresh slate when
+paused). Verified live solo (cats video, claude-in-chrome driving Jellyfin
+web): consumer-drop → "last feed consumer gone" log ✓; 4.5-min zero-viewer
+gap; retune → feeder respawned at 674.0s, wall-clock exact ✓; first
+heartbeat 4231 kbps, no catch-up burst (old behavior: 12721 kbps) ✓;
+position clock runs while untuned (live-channel semantics) ✓; clean stop ✓.
+
+- Note: Jellyfin holds the tuner stream open long after a web client
+  navigates away without a proper stop — used POST /LiveStreams/Close
+  ?liveStreamId=... (query form; JSON body form 400s) to close it
+  deliberately during the test.
+- **NEW BUG, reproduced twice on desktop Chrome (and matches Jon's phone
+  earlier tonight): Jellyfin web live-TV playback of our channel wedges at
+  video readyState 0.** Server blameless — the session's own live.m3u8 URL
+  returns a valid multi-segment playlist (verified by fetching the player's
+  exact URL from the page), Jellyfin's Remux ffmpeg produces segments at
+  1.04x, but hls.js polls the playlist and never requests one segment; no
+  console errors; fresh page load did NOT clear it this time. Roku plays
+  the same stream fine. Investigate before relying on web clients
+  (Tuesday's soak can be Roku-led if unresolved).
+
 ### Where the next session starts
 
-Ship roadmap 1b (v0.3.31 zero-viewer feeder fix) before the Tuesday
-2026-08-19 soak of The Creator (4-pause schedule + natural end, in
-ROADMAP-2026-08-16.md step 2). Roku periodic-stutter forensics from this
-session's FFmpeg.Remux/DirectStream logs still pending.
+Roadmap step 2: Tuesday 2026-08-19 soak of The Creator (4-pause schedule +
+natural end). Before it: investigate the web-client readyState-0 wedge
+(above) — phone/web viewers are expected at a real movie night. Also
+pending: Roku periodic-stutter forensics (FFmpeg session logs preserved
+from arc 7).
