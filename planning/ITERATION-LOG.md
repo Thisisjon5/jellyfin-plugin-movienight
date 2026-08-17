@@ -256,3 +256,45 @@ Roadmap ruled by Jon 2026-08-16 (planning/ROADMAP-2026-08-16.md): (1) rewire
 config page to v3 → (2) movie-length soak via that page → (3) promote v3 +
 delete HLS machinery (Jon's explicit ruling gates the deletion) → (4) proper
 UI, mocks first. Step 1 begun same session.
+
+## Arc 7 — 2026-08-16 evening: v0.3.29/0.3.30 + episode mini-soak — PASS
+
+Same session as arc 6, continued. Shipped two releases, then a ~45-min
+dress rehearsal (W13 S3E7, 1080p/23.976/DTS — same format family as the
+ruled Tuesday asset) with Jon driving the config page and a Roku watching.
+
+- **0.3.29 — config page → v3** (roadmap step 1). Buttons + status drive
+  sw2; channel-name input removed.
+- **0.3.30 — natural-end auto-pause + feed heartbeat.** Both from tracing
+  failure points pre-soak: movie EOF previously left the feed silently
+  stalled (copy loop spinning, clients frozen, no log); now the copy loop
+  notifies BroadcastManager on source EOF and an unexplained end
+  auto-pauses onto the slate. Heartbeat = once-a-minute pid/bytes/kbps.
+- **Pre-soak probes:** The Creator (2023) ruled the Tuesday asset — 1080p
+  h264 progressive 23.976, DTS 7.1 default; encode-probe through the exact
+  feeder args ran 4.0x realtime, DTS→stereo downmix clean.
+- **Mini-soak results (all server swaps 0.2-1.4s, teardown zero-orphan):**
+  baseline pause ✓, 5.5-min long pause ✓, page-driven resume ✓, rapid
+  pause→resume 3.3s apart ✓ (slate lived 3.3s/24KB, no wedge, no burst
+  after), natural end → auto-pause fired first try ✓, Stop from page ✓.
+  Step 1 done-criterion met in full.
+- **THE finding — zero-viewer buffer echo (roadmap 1b, ruled for v0.3.31
+  before Tuesday):** both clients dropped during initial tune → feeder
+  blocked on full stdout pipe ~2min → on retune, -re catch-up burst at ~3x
+  realtime (heartbeat: 12.7 Mbps) → rejoining client's playhead landed the
+  whole gap behind live. Measured echo: 1:50 / ~2:00 / 1:52 across three
+  transitions — a constant offset, not drift. Fix: last-consumer disconnect
+  kills the feeder + marks feeder-pending at current position; lazy-start
+  respawns at live edge.
+- **Lesser findings:** first-tune latency 18-22s (switcher spawn +
+  Jellyfin stream probe — polish item); page 409-race alert copy is vague
+  ("check the logs"); legacy switcher-select buttons confuse (die in step
+  3); NAS clock runs ~28s ahead of the laptop (use server log timestamps
+  for analysis); slate steady-state ~150-180 kbps (static card, expected).
+
+### Where the next session starts
+
+Ship roadmap 1b (v0.3.31 zero-viewer feeder fix) before the Tuesday
+2026-08-19 soak of The Creator (4-pause schedule + natural end, in
+ROADMAP-2026-08-16.md step 2). Roku periodic-stutter forensics from this
+session's FFmpeg.Remux/DirectStream logs still pending.
