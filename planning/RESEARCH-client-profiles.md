@@ -242,6 +242,57 @@ but users report it does not work on PS5. Homebrew-browser routes are unreliable
 **A PS5 is not a movie-night client** - the answer is "use the TV's own app, or a
 Roku". Worth knowing before a guest asks, not after.
 
+### 8b. Amazon and Chromecast — and why the ExoPlayer row is now the main risk
+
+**FACT:** Fire TV Stick (all models), Chromecast **with Google TV**, and Nvidia
+Shield all run the **same `jellyfin-androidtv` app on ExoPlayer**. Fire OS is an
+Android fork; per the client guides, "Fire OS doesn't change what the app does
+once it's running - you get the same source, library browsing, playback and
+settings as on Android TV or Chromecast with Google TV."
+
+That collapses a lot of the device list into one row, and it is the row that
+already failed:
+
+| device | app | engine |
+|---|---|---|
+| Fire TV Stick / 4K / 4K Max | jellyfin-androidtv | ExoPlayer |
+| Chromecast **with Google TV** | jellyfin-androidtv | ExoPlayer |
+| Nvidia Shield | jellyfin-androidtv | ExoPlayer |
+| Android phone / tablet | jellyfin-android | ExoPlayer |
+| Android TV boxes generally | jellyfin-androidtv | ExoPlayer |
+
+**"Chromecast" is two different things and they land in different rows.**
+- **Casting TO a Chromecast** (the Cast button, old dongles) uses
+  `jellyfin-chromecast`, a **Chromium CAF receiver** - same engine class as
+  Chrome and the Xbox, which both direct-play. Likely fine.
+- **Chromecast with Google TV** (the dongle with a remote) is an Android TV
+  device running the ExoPlayer app. Same risk as a Fire Stick.
+
+Anyone saying "I have a Chromecast" has to be asked which one.
+
+### 8c. Revised priority
+
+Before this, ExoPlayer looked like a one-phone edge case. It is not. **Fire
+Sticks and Chromecast-with-Google-TV are among the most common streaming devices
+people own**, and they are the two most likely things a guest brings. Combined
+with the Android phone already measured failing and jellyfin-androidtv #5237
+(LiveTV + MPEG-TS resets every ~30s under ExoPlayer), the ExoPlayer row is the
+single largest threat to "a variety of devices" working.
+
+Consequences:
+
+1. **The fmp4 experiment (§3) is now the top priority, not a Firefox curiosity.**
+   It is the one change that could move BOTH failing engine classes at once. If
+   fmp4 fixes ExoPlayer, the fleet goes from "3 of 5 devices we own" to "nearly
+   everything except a PS5".
+2. **If fmp4 does NOT fix ExoPlayer**, then per-client `MediaSourceInfo` is
+   worth building after all - because the affected population is large enough to
+   justify it, which was not clear when it was just one phone.
+3. **A Fire Stick should be borrowed and tested** before any real movie night.
+   It is the highest-value untested device on the list, ahead of Apple TV -
+   Apple is predicted to work and would be a pleasant confirmation; Fire TV is
+   predicted to fail and would be an expensive surprise.
+
 ### What to actually do with this
 
 1. **Do not build per-client `MediaSourceInfo` yet.** The predicted fleet is
