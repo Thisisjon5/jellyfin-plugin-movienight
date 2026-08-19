@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
@@ -107,7 +108,7 @@ public class T0GateTunerHost : ITunerHost
         var url = baseUrl + LadderPath;
 
         _gate.RecordTunerEvent(FormattableString.Invariant(
-            $"GetChannelStreamMediaSources({channelId}) url={url} container={_gate.SourceContainer}"));
+            $"GetChannelStreamMediaSources({channelId}) url={url} container={_gate.SourceContainer ?? "(null)"} subProtocol={_gate.SourceSubProtocol}"));
 
         var source = new MediaSourceInfo
         {
@@ -115,13 +116,16 @@ public class T0GateTunerHost : ITunerHost
             Path = url,
             TranscodingUrl = url,
             Protocol = MediaProtocol.Http,
+            // Container decides ffmpeg's INPUT demuxer on any server-side fallback path, and
+            // Jellyfin's own M3U tuner leaves it null so ffmpeg auto-detects. Declaring "ts" made
+            // it run "-f mpegts" against an HLS PLAYLIST (exit 187, 2026-08-19 Android round);
+            // declaring "hls" makes the profile matcher refuse direct play. Null is the only value
+            // that is not a lie to one consumer or the other.
             Container = _gate.SourceContainer,
             TranscodingContainer = "ts",
-
-            // ponytail: no TranscodingSubProtocol. With SupportsTranscoding=false there is no
-            // transcode for a sub-protocol to describe, and the .m3u8 URL plus Container="hls"
-            // already say what this is. Add it if the gate shows a client not treating the URL as
-            // HLS.
+            TranscodingSubProtocol = string.Equals(_gate.SourceSubProtocol, "hls", StringComparison.Ordinal)
+                ? MediaStreamProtocol.hls
+                : MediaStreamProtocol.http,
             IsInfiniteStream = true,
             IsRemote = false,
 

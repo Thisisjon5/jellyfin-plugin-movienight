@@ -92,7 +92,8 @@ public class MovieNightDebugController : ControllerBase
     /// Every parameter is optional; omitted ones keep their current value.
     /// </summary>
     /// <param name="baseUrl">Absolute base for the ladder URL (e.g. http://100.108.120.127:8096), "loopback" for the server's own address, or "" for a relative URL.</param>
-    /// <param name="container">Declared container, e.g. "ts", "mpegts", "hls", or "" for none.</param>
+    /// <param name="container">Declared container, e.g. "ts" or "hls". Pass "null" to clear it (an EMPTY query value binds to null and is indistinguishable from "not supplied", which silently no-opped on 2026-08-19).</param>
+    /// <param name="subProtocol">Declared transcoding sub-protocol: "hls" or "http".</param>
     /// <param name="directPlay">SupportsDirectPlay.</param>
     /// <param name="directStream">SupportsDirectStream.</param>
     /// <param name="supportsTranscoding">SupportsTranscoding.</param>
@@ -102,6 +103,7 @@ public class MovieNightDebugController : ControllerBase
     public ActionResult T0Source(
         [FromQuery] string? baseUrl,
         [FromQuery] string? container,
+        [FromQuery] string? subProtocol,
         [FromQuery] bool? directPlay,
         [FromQuery] bool? directStream,
         [FromQuery] bool? supportsTranscoding,
@@ -114,7 +116,12 @@ public class MovieNightDebugController : ControllerBase
 
         if (container is not null)
         {
-            _t0Gate.SourceContainer = container;
+            _t0Gate.SourceContainer = string.Equals(container, "null", StringComparison.OrdinalIgnoreCase) ? null : container;
+        }
+
+        if (subProtocol is not null)
+        {
+            _t0Gate.SourceSubProtocol = subProtocol;
         }
 
         if (directPlay.HasValue)

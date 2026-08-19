@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.34.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.34.0/jellyfin-plugin-movienight_0.3.34.0.zip",
+                "checksum": "e7275b0868b69d17212a0f2d896203ad",
+                "timestamp": "2026-08-19T20:23:56Z",
+                "changelog": "Container becomes nullable and TranscodingSubProtocol is restored. Container decides ffmpeg's input demuxer on any server-side fallback path: \"ts\" made Jellyfin run -f mpegts against an HLS playlist (exit 187, Android), while \"hls\" makes the profile matcher refuse direct play. Null is what Jellyfin's own M3U tuner uses. Also fixes the knob endpoint's empty-query-value trap."
+            },
+            {
                 "version": "0.3.33.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.33.0/jellyfin-plugin-movienight_0.3.33.0.zip",

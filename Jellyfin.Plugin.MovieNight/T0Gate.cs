@@ -87,7 +87,19 @@ public sealed class T0Gate
     /// This is the field most likely to decide the gate, hence a knob rather than a constant.
     /// </para>
     /// </summary>
-    public string SourceContainer { get; set; } = "ts";
+    public string? SourceContainer { get; set; }
+
+    /// <summary>
+    /// Gets or sets the declared transcoding sub-protocol ("hls", "http", or null). Runtime-settable.
+    /// <para>
+    /// Describes the shape of the stream to the CLIENT, unlike <see cref="SourceContainer"/> which
+    /// decides ffmpeg's input demuxer on the server. Dropped from the first spike build because its
+    /// namespace could not be resolved; it lives in <c>Jellyfin.Data.Enums</c>, found via the
+    /// running server's own OpenAPI schema at <c>/api-docs/openapi.json</c> - the reliable way to
+    /// settle any "what type/values does this Jellyfin field take" question.
+    /// </para>
+    /// </summary>
+    public string? SourceSubProtocol { get; set; } = "hls";
 
     /// <summary>Gets or sets a value indicating whether the media source declares SupportsDirectPlay. Runtime-settable.</summary>
     public bool SourceSupportsDirectPlay { get; set; } = true;
@@ -115,6 +127,7 @@ public sealed class T0Gate
     {
         SourceBaseUrl,
         SourceContainer,
+        SourceSubProtocol,
         SourceSupportsDirectPlay,
         SourceSupportsDirectStream,
         SourceSupportsTranscoding,

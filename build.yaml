@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.33.0"
+version: "0.3.34.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,23 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.34.0: Container becomes nullable, and TranscodingSubProtocol comes
+  back. The T0 gate PASSED on Roku with container="ts" (DirectPlay, zero
+  ffmpeg, all 56 fetches from the Roku itself) but Android then failed,
+  and the reason was that same field: Container decides ffmpeg's INPUT
+  demuxer on any server-side fallback path, so "ts" made Jellyfin run
+  "-f mpegts" against an HLS PLAYLIST - exit 187, and the server refetched
+  master.m3u8 eight times without ever reaching a variant. "hls" has the
+  opposite problem: correct demuxer, but the profile matcher refuses
+  direct play (ContainerNotSupported). Null is the only value that is not
+  a lie to one consumer or the other, and it is what Jellyfin's own M3U
+  tuner uses - confirmed nullable in the server's own OpenAPI schema.
+  TranscodingSubProtocol (dropped in 0.3.32.0 when its namespace could not
+  be found - it is Jellyfin.Data.Enums.MediaStreamProtocol, also found via
+  /api-docs/openapi.json) is restored and settable. Also fixes a real trap
+  in the knob endpoint itself: an EMPTY query value binds to null in
+  ASP.NET and was indistinguishable from "not supplied", so "container="
+  silently no-opped; pass "null" explicitly to clear.
   0.3.33.0: Makes the T0 gate's media-source negotiation runtime-tunable,
   after the first gate run (0.3.32.0) failed on TWO of my own bugs at once
   and so could not separate them. (1) The ladder URL was RELATIVE:
