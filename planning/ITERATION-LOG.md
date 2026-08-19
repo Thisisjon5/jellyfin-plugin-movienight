@@ -637,3 +637,80 @@ our `http://192.168.68.118:8096` ladder URL, which presents exactly as "nothing
 happens". Needs the actual browser URL to confirm. Also unconfirmed whether the
 web client in the session list (reporting the NAS's own address) is a browser on
 a laptop or the `firefox` container running on the NAS itself.
+
+### Arc 10c — T2 PASSED (ladder encode + GOP alignment), and fmp4 is free
+
+Run via the `encode-probe` endpoint against a real library title
+(`The Dressmaker (2015).mkv`, h264 1920x1080 **44.5 Mbps** 23.976fps — deliberately
+the heavy-decode case, same class as the file that pinned a core in the failed
+soak). Design §4(D) ladder shape: rung0 `-c copy`, rungs 1/2 `h264_qsv` at
+3000k/1200k, `-g 96 -forced_idr 1`, `-hls_time 4`.
+
+**T2 criterion 1 — encoder sustains >= 1.0x realtime: PASS, with headroom.**
+
+Interleaved A/B/A/B (ordering alternated so drift cannot fake the result):
+
+| run | segment type | fps | speed |
+|---|---|---|---|
+| 1 | mpegts | 42 | **1.73x** |
+| 2 | mpegts | 49 | **2.04x** |
+| 3 | fmp4 | 62 | **2.56x** |
+| 4 | fmp4 | 60 | **2.49x** |
+
+Every configuration clears 1.0x; slowest was 1.73x. An isolated earlier run
+measured mpegts at 2.76x and fmp4 at **1.01x**, which looked like a serious
+fmp4 penalty — it was a **loaded box** (load average 8.70, driven by the probes
+themselves), not a property of the format. Reported only after the interleaved
+repeat, which reversed it. §10.2's "believed comfortable, unmeasured" is now
+measured.
+
+**T2 criterion 2 — every rung's segments GOP-aligned: PASS, exactly.**
+
+Identical under BOTH segment types:
+
+```
+v1 (720p qsv):  n=23  total=90.007  distinct durations = [4.004, 1.919 final]
+v2 (480p qsv):  n=23  total=90.007  distinct durations = [4.004, 1.919 final]
+```
+
+4.004000s = **96 frames at 23.976fps**, to the millisecond, identical across
+rungs. Clean rung-switching is demonstrated, not assumed. (The Roku had already
+shown three unprompted rung switches in arc 10, which is the same property
+observed from the client side.)
+
+**T2 also demonstrated WHY the mezzanine is mandatory.** Rung 0 is `-c copy`, so
+against an arbitrary movie it inherits that movie's GOP:
+
+```
+v0 (-c copy):  n=23  total=90.228  distinct = [1.681, 3.42, 3.67, 3.712, 4.004, 4.087, 4.171, 4.338]
+```
+
+Ragged boundaries and 0.22s of drift against the encoded rungs. The design
+asserts the mezzanine must carry a fixed closed GOP matching the ladder's
+(§4(A)); this is the empirical failure mode if it does not, and it is M1's
+acceptance criterion.
+
+**Segment-type finding: fmp4 costs nothing.** It was at least as fast as mpegts
+in every paired run (mean ~2.53x vs ~1.89x; MPEG-TS carries ~5% packet overhead,
+so cheaper fmp4 is plausible rather than surprising). Since fmp4 is also the
+format most likely to widen client support (Firefox per arc 10b research;
+possibly ExoPlayer per androidtv #5237, whose stated trigger is MPEG-TS), there
+is **no encode-cost trade-off to rule on** — the earlier framing of this as a
+tension was wrong.
+
+**Implementation detail for M3:** fmp4 emits `#EXT-X-MAP:URI="init_1.mp4"` —
+per-variant init files. Our ladder route's whitelist currently allows only
+`master.m3u8`, `v[0-2]/index.m3u8` and `v[0-2]/seg_<digits>.ts`. It must also
+allow `init_<digits>.mp4` (and `.m4s` segments) or fmp4 404s on the first byte.
+
+**Still open before M1 commits to a format:** fmp4 has been proven on the
+*encoder* side only. No client has played an fmp4 ladder yet — Roku, Xbox and
+Chrome all passed on **mpegts**. A segment-type knob on the T0 ladder plus one
+tune per client settles it, and that should happen before the mezzanine is built,
+since the mezzanine must be produced in the chosen format.
+
+**Housekeeping:** these probes wrote into the T0 ladder directory (the only path
+the serving route exposes, so playlists could be read back), overwriting the
+synthetic test-pattern ladder with 90s of The Dressmaker. Rebuild with
+`POST /MovieNight/api/debug/t0/build-ladder` when the synthetic ladder is wanted
+again.
