@@ -168,6 +168,93 @@ For any device that shows up, in order:
 - **The per-client URL problem is unaffected and still real** — that one is about
   reachability (LAN vs tailscale vs https origin), not negotiation.
 
+---
+
+## 8. The device sweep (2026-08-19)
+
+Jon's list: Apple TV, iPhone, PlayStation, Samsung, LG, plus what we own.
+
+### The organising insight
+
+**The fleet does not split by device. It splits by PLAYER ENGINE**, and there are
+only four that matter:
+
+| engine | HLS handling | our ladder |
+|---|---|---|
+| **Native HLS** (Safari, AVPlayer, Roku) | first-class, TS segments fine | works |
+| **Chromium + hls.js** (Chrome, Edge/WebView2, Tizen, webOS) | hls.js remuxes TS, works | works |
+| **Firefox + hls.js** | same library, TS path fails in practice | **FAILS** (DirectPlayError) |
+| **ExoPlayer** (Android phone/TV) | known-bad with Live TV + MPEG-TS | **FAILS** |
+
+Every prediction below follows from which engine the client uses. This also means
+**one fix can move a whole engine class at once** - the fmp4 experiment in §3
+targets the Firefox row, and possibly the ExoPlayer row too.
+
+### Per-device
+
+| device | official client | engine | prediction | confidence |
+|---|---|---|---|---|
+| Roku Ultra | jellyfin-roku | native | **direct-play** | **MEASURED** |
+| Xbox Series X | jellyfin-uwp | Edge WebView2 (Chromium) | **direct-play** | **MEASURED** |
+| Desktop Chrome | jellyfin-web | Chromium + hls.js | **direct-play** | **MEASURED** |
+| Desktop Firefox | jellyfin-web | Firefox + hls.js | hop (`DirectPlayError`) | **MEASURED** |
+| Pixel / Android phone | jellyfin-android | ExoPlayer | hop (`ContainerNotSupported`) | **MEASURED** |
+| **Apple TV** | **Swiftfin (tvOS)** | AVKit *or* VLCKit | **direct-play** | HIGH |
+| **iPhone / iPad** | **Swiftfin (iOS)** | AVKit *or* VLCKit | **direct-play** | HIGH |
+| **Samsung TV** | **jellyfin-tizen** | jellyfin-web on Tizen | **direct-play** | HIGH |
+| **LG TV** | **jellyfin-webos** | jellyfin-web on webOS | **direct-play** | HIGH |
+| **PlayStation 5** | **NONE EXISTS** | - | **no path** | HIGH |
+| PlayStation 4 | Switchfin (3rd party) | libmpv-ish | unknown | LOW |
+| Android TV / Fire TV | jellyfin-androidtv | ExoPlayer | hop, per #5237 | MEDIUM |
+| Chromecast | jellyfin-chromecast | Chromium receiver | direct-play | MEDIUM |
+| Kodi | JellyCon / jellyfin-kodi | Kodi's own player | direct-play | MEDIUM |
+
+### The reasoning behind the HIGH-confidence ones
+
+**Apple TV and iPhone — the best-case clients, both via Swiftfin (official).**
+Swiftfin ships **two** players and lets the user pick:
+- *Native* = AVKit/AVPlayer. Apple platforms have **real native HLS**; HLS is
+  Apple's own format. This is the one engine our ladder was literally designed
+  for.
+- *Swiftfin* = VLCKit. Its DirectPlay profile **defines only audio codecs** -
+  "basically any container/video codec should pass through for DirectPlay".
+  That is the most permissive profile in the ecosystem.
+
+Either way the negotiation should succeed. Two gotchas on record, neither fatal
+for us: AVPlayer has no subtitle-track selection in Swiftfin due to HLS
+incompatibilities (we ship no subtitles), and **VLCKit does not support TLS 1.3**
+- relevant only if these clients come in through a reverse proxy, which for
+remote viewers over tailscale they may well do.
+
+**Samsung and LG — already covered by the Xbox result.** `jellyfin-tizen` and
+`jellyfin-webos` are wrappers around **jellyfin-web**. This is not inference:
+`browserDeviceProfile.js` contains explicit `browser.tizen`, `browser.web0s` and
+`browser.vidaa` branches - the same file we read in §3. They run the same
+`canPlayHls()` logic as Chrome, and they are among the few platforms granted
+**HEVC-in-TS** direct play, i.e. their TS handling is *better* than desktop
+browsers', not worse. Xbox direct-playing (Chromium/WebView2, same codebase) is
+direct evidence for this whole row.
+
+**PlayStation — there is no client, and that is the finding.** No official
+Jellyfin app exists for PS5 as of 2026; the platform is not on Jellyfin's
+supported list. Third-party **Switchfin** covers PC, **PS4**, PSVita and Switch,
+but users report it does not work on PS5. Homebrew-browser routes are unreliable.
+**A PS5 is not a movie-night client** - the answer is "use the TV's own app, or a
+Roku". Worth knowing before a guest asks, not after.
+
+### What to actually do with this
+
+1. **Do not build per-client `MediaSourceInfo` yet.** The predicted fleet is
+   mostly direct-play. The two known failures share a plausible single cause
+   (MPEG-TS segments), and the fmp4 experiment is one flag.
+2. **Test fmp4 next** (§3). If Firefox flips AND Roku/Xbox/Chrome survive, the
+   matrix goes from 3/5 to 4/5 with no new code, and ExoPlayer may come along.
+3. **Borrow an Apple device before assuming.** HIGH confidence is not MEASURED,
+   and every confident prediction this project has made about client behaviour
+   has been wrong at least once.
+4. **Stamp client versions** on any matrix (per §5) - measured here on Roku
+   DVP-15.3, Xbox WebView2 Chrome/150, desktop Chrome/151.
+
 ## Sources
 
 - jellyfin-web `src/scripts/browserDeviceProfile.js` (master)
