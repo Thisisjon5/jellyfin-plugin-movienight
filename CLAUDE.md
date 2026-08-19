@@ -11,13 +11,15 @@ https://github.com/Thisisjon5/jellyfin-plugin-movienight; manifest.json at
 repo root on master is the install source; target = the NAS's real Jellyfin
 ([[jellyfin]], 10.11.6, port 8096).
 
-**Current arc (2026-08-14/15): universal pause → "switcher v3".** The HLS
-splice design (spikes 3–6, v0.3.4–0.3.19) is architecturally dead — its
-discontinuity markers don't survive Jellyfin's remux hop. Replaced by the
-research-validated v3: per-tune persistent `-c copy` remuxer reading a local
-feed URL; the plugin swaps movie-feeder ↔ slate-feeder through that feed for
-pause/resume-at-timestamp. **v0.3.28.0 installed on NAS, acceptance test NOT
-yet run** — start at `planning/HANDOFF-2026-08-15.md`. Full history:
+**Current arc (2026-08-18/19): shared ABR ladder.** The 2026-08-18 soak FAILED
+— Jellyfin's Live TV path spawns one ffmpeg per client ALWAYS, even for a pure
+copy, so server cost was O(N) and the sliding window was destroyed. Replaced by
+a ladder served through our own `ITunerHost` so clients pull segments directly:
+`planning/DESIGN-abr-ladder.md`. **M0 gate (T0) PASSED and T2 PASSED
+(2026-08-19, v0.3.34.0)** — Roku/Xbox/Chrome DirectPlay with zero server
+ffmpeg; ladder encodes at 1.7–2.6x realtime with exact 4.004s GOP alignment.
+Universal pause (switcher v3) is unchanged and sits upstream of all this.
+**Next session starts at `planning/HANDOFF-2026-08-19.md`.** Full history:
 `planning/ITERATION-LOG.md`; prior-art research:
 `planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
 
@@ -132,15 +134,18 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   PlaybackInfo endpoint throws NullReferenceException on every tune attempt —
   the client must hard-reload (F5) before it can tune again. Cost two
   misdiagnosed "v3 is broken" rounds on 2026-08-15.
-- **A `MediaSourceInfo` with `Container = "hls"` will never DirectPlay** —
-  Jellyfin answers `TranscodeReasons: ContainerNotSupported` and takes its own
-  per-client remux hop. Device profiles list `hls` as a transcoding TARGET, not
-  a direct-play container; use **`"ts"`**. This single field is what moved the
-  T0 gate from failing to passing (2026-08-19) — `SupportsTranscoding = false`
-  did NOT do the work, because the profile matcher rejects direct play before
-  that flag is ever consulted. Related: a media source's `Path`/`TranscodingUrl`
-  must be an **absolute** URL reachable by the client — a relative one is handed
-  to ffmpeg as a file path (`-f hls -i "/MovieNight/..."` → exit 254 in 30ms).
+- **A `MediaSourceInfo`'s `Container` does TWO jobs and they can disagree.** It
+  feeds the client's direct-play profile matcher AND picks ffmpeg's `-f` input
+  demuxer on any server-side fallback. Measured 2026-08-19: `"ts"` gets Roku
+  direct play but makes the fallback run `-f mpegts` against an HLS *playlist*
+  (exit 187); `null` fixes the fallback but costs Roku direct play; **`"hls"` is
+  the value that works** — Roku, Xbox and Chrome all DirectPlay it, and it gives
+  a correct `-f hls` to whoever falls back. The profile match happens BEFORE
+  `SupportsTranscoding` is consulted, so that flag is not what decides direct
+  play. Related and separate: `Path`/`TranscodingUrl` must be an **absolute**
+  URL the client can reach — a relative one is handed to ffmpeg as a file path
+  (`-f hls -i "/MovieNight/..."` → exit 254 in 30ms). Full client analysis:
+  `planning/RESEARCH-client-profiles.md`.
 - **The "Update Plugins" scheduled task is currently broken server-wide on this
   NAS** — `IOException` on `Jellyfin Tweaks_4.0.0.0/thumb.png` ("being used by
   another process") thrown from `PopulateManifest` inside `GetAvailablePackages`

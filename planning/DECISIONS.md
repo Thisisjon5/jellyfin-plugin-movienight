@@ -573,3 +573,28 @@ web/repo-fetch access, not available in this conversation.
   are acceptable on the hop, given the hop is O(N) and is what failed the soak.
   A movie night with Roku direct and one phone on a hop may be fine; five phones
   is the old failure. Not an implementation call.
+
+## 2026-08-19 (late) — Jon's rulings from the client-testing session
+
+- **RULING (Jon): the requirements are live edge, synced play, bit ladder — and
+  CAPTIONS ARE A V1 REQUIREMENT.** Captions appear nowhere in
+  `DESIGN-abr-ladder.md`. WebVTT-over-HLS is the ecosystem's supported path
+  (an `#EXT-X-MEDIA:TYPE=SUBTITLES` rendition beside the video rungs), which
+  touches both the ladder encoder and the mezzanine — so it must be designed in
+  before M1/M2, not bolted on. Open sub-decision: Swiftfin's Native/AVPlayer has
+  no subtitle-track selection, so Apple clients may need the VLCKit player for
+  captions — a UX/documentation call, still Jon's.
+- **RULING (Jon): ignore the Jellyfin Android PHONE app for now.** Read from its
+  source: `jellyfin-android`'s direct-play containers are progressive
+  single-file formats only (`mp4, fmp4, webm, mkv, mp3, ogg, wav, mpegts, flv,
+  aac, flac, 3gp`) — no `hls`, no `dash`. It cannot direct-play any adaptive
+  stream; not fixable server-side. Workaround if it ever matters: Chrome on the
+  phone. Note this does NOT apply to `jellyfin-androidtv` (Fire Stick, Chromecast
+  with Google TV, Shield), which does list HLS.
+- **Target device fleet (Jon):** Roku, Android phone, Xbox, web browser today;
+  Apple TV, iPhone, Samsung, LG, Amazon Fire Stick and Chromecast expected. Full
+  per-device analysis and predictions: `planning/RESEARCH-client-profiles.md`.
+- **NOT yet ruled — segment format (mpegts vs fmp4).** Blocks M1, because the
+  mezzanine is rung 0 and must be built in the chosen format. fmp4 costs nothing
+  on the encoder and may fix Firefox; but no client has played an fmp4 ladder,
+  and Roku/Xbox/Chrome all passed on mpegts. Test before ruling.
