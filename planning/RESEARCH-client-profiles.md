@@ -293,6 +293,79 @@ Consequences:
    Apple is predicted to work and would be a pleasant confirmation; Fire TV is
    predicted to fail and would be an expensive surprise.
 
+### 8d. CORRECTION — the ExoPlayer row splits in two (read from source, 2026-08-19)
+
+§8b was wrong to treat "ExoPlayer" as one row. The two Android apps have
+opposite profiles, and both were read directly from source rather than inferred.
+
+**`jellyfin-android` (PHONE) — cannot direct-play ANY manifest. FACT.**
+`DeviceProfileBuilder.kt` builds `DirectPlayProfiles` from:
+
+```kotlin
+SUPPORTED_CONTAINER_FORMATS =
+    "mp4", "fmp4", "webm", "mkv", "mp3", "ogg", "wav", "mpegts", "flv", "aac", "flac", "3gp"
+```
+
+**No `hls`. No `dash`.** Those appear only in its *TranscodingProfiles*. Every
+entry is a progressive single-file container. So the phone app cannot direct-play
+an HLS ladder, a DASH manifest, or any adaptive stream - not because of our
+fields, and not fixable by changing segment type. This fully explains
+`ContainerNotSupported` under `ts`, `null` AND `hls`. **Architectural limit of
+that client, not a bug in our source.**
+
+(Note `"mpegts"` IS listed, and we tested `"ts"` - different strings. Declaring
+`mpegts` might pass negotiation, but the URL is still a playlist, so it would
+likely fail at playback like Firefox. Untested; low expected value.)
+
+**`jellyfin-androidtv` (FIRE STICK, CHROMECAST W/ GOOGLE TV, SHIELD) — DOES list
+hls. FACT.** From `util/profile/deviceProfile.kt`:
+
+```kotlin
+directPlayProfile {
+    container(
+        Codec.Container.ASF, Codec.Container.HLS, Codec.Container.M4V,
+        Codec.Container.MKV, Codec.Container.MOV, Codec.Container.MP4,
+        Codec.Container.OGM, Codec.Container.OGV, Codec.Container.TS,
+        Codec.Container.VOB, Codec.Container.WEBM, Codec.Container.WMV,
+        Codec.Container.XVID,
+    )
+```
+
+`HLS` **and** `TS` are both direct-play containers there. It also declares HLS
+transcoding profiles in **both** TS (`Codec.Container.TS`) and fMP4
+(`Codec.Container.MP4`) flavours, so ExoPlayer-on-TV handles both segment types.
+
+**Revised prediction: Fire Stick and Chromecast-with-Google-TV should
+DIRECT-PLAY our ladder.** They were the scariest devices on the list and are now
+predicted fine. The residual risk for them is androidtv #5237 (LiveTV + MPEG-TS
+resets every ~30s), which is a *playback* defect rather than a negotiation one -
+and its stated trigger is MPEG-TS, which is another argument for fmp4.
+
+So the genuinely-unfixable set is **one client**: the Jellyfin Android *phone*
+app. Everything else is predicted to work or already measured working.
+
+### 8e. Captions (V1 requirement) — the constraint is already visible
+
+From the same androidtv profile:
+
+```kotlin
+// Jellyfin server only supports WebVTT subtitles in HLS, other text subtitles
+// will be converted to WebVTT which we do not want so only allow delivery over
+// HLS for WebVTT subtitles
+subtitleProfile(Codec.Subtitle.VTT,    embedded = true, hls = true, external = true)
+subtitleProfile(Codec.Subtitle.WEBVTT, embedded = true, hls = true, external = true)
+```
+
+**FACT: WebVTT-over-HLS is the supported caption path** across this ecosystem.
+For our ladder that means a `#EXT-X-MEDIA:TYPE=SUBTITLES` rendition with WebVTT
+segments alongside the video rungs - standard HLS, and ffmpeg can emit it.
+
+**Known collision to design around (FACT, from §8):** Swiftfin's *Native*
+(AVPlayer) player has **no subtitle-track selection** due to HLS
+incompatibilities. So on Apple TV / iPhone, captions may require the user to pick
+the **VLCKit** player rather than Native. That is a documentation/UX answer, not
+a server one - but it must be decided before captions are called done.
+
 ### What to actually do with this
 
 1. **Do not build per-client `MediaSourceInfo` yet.** The predicted fleet is
