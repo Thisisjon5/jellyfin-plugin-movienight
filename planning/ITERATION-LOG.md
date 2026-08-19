@@ -561,3 +561,79 @@ question answered affirmatively in passing, and the GOP alignment is real.
   the box at load 7.24 / **64.2 % iowait** / 91 % swap. The container was
   recreated mid-session, which reaped all of them: 0 zombies, load 2.33, iowait
   8.7 %. Root cause unfixed — it accrues ~50/day, so it will be back.
+
+### Arc 10b (same evening) — the client matrix, and why `Container` needs a per-client answer
+
+Tested the same passing ladder against Roku and the Android app by flipping the
+runtime knob. The results do not agree with each other:
+
+| `Container` | Roku | Android |
+|---|---|---|
+| `"ts"` | **DirectPlay, 0 ffmpeg, 56 fetches from the Roku's own IP** | `ContainerNotSupported` → hop → `-f mpegts` on a playlist → **exit 187** |
+| `null` | **Transcode** (regressed — all fetches from the server) | Transcode; plays, because with no `-f` ffmpeg auto-detects HLS |
+
+`Container` does double duty and the two duties disagree:
+
+- it feeds the **client's direct-play profile matcher**, and
+- it picks **ffmpeg's `-f` input demuxer** on any server-side fallback.
+
+So `"ts"` bought Roku direct play and poisoned the fallback; `null` fixed the
+fallback and cost Roku direct play. Both clients "worked" under `null` — via the
+per-client ffmpeg the whole design exists to delete. **"It plays" is not the
+criterion; `PlayMethod` plus who fetched the segments is.**
+
+### The profile data
+
+`GET /Sessions` → `Capabilities.DeviceProfile`:
+
+```
+Roku    DirectPlay video containers: dash, hls, ism, mkv,webm, mp4,mov,m4v, ts
+Android no DeviceProfile registered  (the app sends its profile per PlaybackInfo request)
+Web     no DeviceProfile registered
+```
+
+**Roku accepts `hls` for direct play.** It was never actually disqualified — the
+one time we tried `hls`, the URL was still relative and unfetchable, and the
+failure was mis-attributed to the container. `hls` is therefore the only value
+that could satisfy both sides at once: Roku direct-plays it, AND it hands a
+correct `-f hls` to any client that does fall back. **Untested; test before
+assuming a per-client mechanism is needed at all.**
+
+### The constraint this exposes (not in the design doc)
+
+`ITunerHost.GetChannelStreamMediaSources(channelId, ct)` returns ONE
+`MediaSourceInfo` per channel and is never handed the requesting device's
+profile. If no single `Container` satisfies every client, M4 must vary the
+media source per requester. Two mechanisms, only one of which actually helps:
+
+1. **Vary the MediaSourceInfo per requester (this is the one that works).** The
+   call happens on the PlaybackInfo request thread, so the client identity is
+   reachable from ambient request state (`IHttpContextAccessor` → auth info's
+   Client/DeviceId), and for clients that register capabilities (Roku does,
+   Android does not) `IDeviceManager` can return the profile by device id.
+   Fallback for unregistered clients is a client-name heuristic.
+2. **Vary the CONTENT served at the ladder URL by User-Agent.** Easy — our route
+   already sees the client directly — but it cannot fix anything, because a
+   client that is refused direct play never reaches our URL at all. Worth
+   recording so it is not proposed later as a solution to this problem.
+
+### Measurement correction
+
+An ffmpeg process census is NOT a reliable instrument here. Jellyfin remuxes
+with `-readrate 10`, so it races through the 5-minute VOD ladder in ~30s, exits,
+and the client plays out of `/config/cache/transcodes` — a census taken late
+reads 0 whether or not a hop happened. The arc-10 PASS does not rest on it
+(`PlayMethod: DirectPlay` plus fetches from the Roku's own IP are both
+timing-independent), but `PlayMethod` + the hit log are the primary instruments
+from here.
+
+### Web: still unexplained
+
+Web does not play, before or after a hard refresh, and produces **no server-side
+error at all** — no ffmpeg, no exception, nothing in the log. Ruled out: CORS
+(our route returns `Access-Control-Allow-Origin: *`). Leading hypothesis:
+**mixed content** — a Jellyfin page served over `https://` will silently refuse
+our `http://192.168.68.118:8096` ladder URL, which presents exactly as "nothing
+happens". Needs the actual browser URL to confirm. Also unconfirmed whether the
+web client in the session list (reporting the NAS's own address) is a browser on
+a laptop or the `firefox` container running on the NAS itself.

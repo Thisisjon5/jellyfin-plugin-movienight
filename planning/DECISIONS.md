@@ -545,3 +545,31 @@ web/repo-fetch access, not available in this conversation.
 - **Spike hygiene:** the T0 ladder route is anonymous by design (an auth failure
   would be indistinguishable from a gate failure). M3 restores `[Authorize]`, and
   the whole T0 spike gets deleted once M4's real tuner host lands.
+
+## 2026-08-19 (late) — client matrix: `Container` needs a per-client answer
+
+- **The arc-10 PASS stands**: Roku direct-plays our ladder with zero server
+  involvement. What follows is about client coverage, not about the gate.
+- **No single `Container` value has yet satisfied every client.** `"ts"` gives
+  Roku direct play but breaks the server-side fallback (`-f mpegts` on an HLS
+  playlist, exit 187); `null` fixes the fallback but regresses Roku to the hop.
+  Under `null` both clients play — through the per-client ffmpeg the design
+  exists to eliminate.
+- **Next thing to test, before designing anything: `Container = "hls"` with an
+  absolute URL.** Roku's published profile lists `hls` among its direct-play
+  containers, and `hls` also yields the correct `-f hls` on any fallback. It was
+  never fairly tested — its one trial ran with the relative URL. Knob is already
+  set; awaiting a tune.
+- **Constraint for M4, newly discovered and NOT in DESIGN-abr-ladder.md:**
+  `GetChannelStreamMediaSources` returns one `MediaSourceInfo` per channel and
+  never sees the requesting device's profile. If no single container works, the
+  media source must vary per requester — reachable via ambient request state
+  (`IHttpContextAccessor` → Client/DeviceId) and `IDeviceManager` for clients
+  that register capabilities. Roku registers a profile; **Android and Web do
+  not** (they send theirs per PlaybackInfo request), so those need a fallback
+  heuristic. Serving different CONTENT per User-Agent at the ladder URL does NOT
+  solve this — a client refused direct play never reaches the URL.
+- **OPEN, needs Jon:** whether clients that cannot direct-play (possibly Android)
+  are acceptable on the hop, given the hop is O(N) and is what failed the soak.
+  A movie night with Roku direct and one phone on a hop may be fine; five phones
+  is the old failure. Not an implementation call.
