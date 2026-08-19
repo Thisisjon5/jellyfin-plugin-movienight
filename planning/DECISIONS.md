@@ -485,3 +485,34 @@ web/repo-fetch access, not available in this conversation.
   connection across clients (`AllowStreamSharing`, "consumer count is now 2"
   observed live) — one encoder, Jellyfin fans out. Verify pid count stays 1 with
   a second real client when convenient.
+
+## 2026-08-18 (evening) — soak FAILED; delivery re-architected to a shared ABR ladder
+
+- **Roadmap §2 soak FAILED** with three clients (Xbox + Roku + web) on
+  The Creator. Root cause measured, not guessed: Jellyfin spawns one ffmpeg per
+  client for Live TV — always, even for byte-identical codecs — and runs it with
+  `-hls_playlist_type event -hls_list_size 0`, so each client accumulates the
+  entire broadcast on disk. O(N) writes to a single 7200rpm spindle starved the
+  feeder; all three clients froze together. Full evidence: ITERATION-LOG arc 9.
+- **RULING (Jon): approach 1 — a shared ABR ladder served through a custom
+  `ITunerHost`.** The plugin returns its own `MediaSourceInfo` with
+  `TranscodingUrl` pointing at our `master.m3u8`, so clients pull segments
+  directly and select their own rung. Server compute becomes O(1) in viewers.
+  Design: `planning/DESIGN-abr-ladder.md`.
+- **RULING (Jon): ladder starts at 1080p 6 Mbps / 720p 3 Mbps / 480p 1.2 Mbps**,
+  "start there, adjust if needed." The mezzanine IS the top rung, served
+  `-c copy`, so rung 1 costs no encode.
+- **RULING (Jon): a mezzanine prep step before movie night is acceptable.**
+- **RULING (Jon): loopback-only becomes "authenticated Jellyfin user"** on the
+  stream routes. This revises SPEC §148. Narrow in practice — `TranscodingUrl`
+  is fetched from Jellyfin's own HTTP server where our routes already live.
+- **Approach 2 (server-driven sync over VOD DirectPlay) is REJECTED with
+  evidence.** Roku reports `SupportsMediaControl: false` and ignores playstate
+  commands (Xbox froze on the same command; Roku kept playing). Client-side
+  code, unreachable from a server plugin. Confirms SPEC §21.
+- **Target scale (Jon): 5 viewers minimum, up to 10, across the internet over
+  tailscale.** No CDN, so egress is O(N) — but measured upstream is 142-222
+  Mbps against ~60 Mbps for ten top-rung viewers. Bandwidth is not the binding
+  constraint; encode capacity and box health are.
+- **Unrelated bug found:** the `velocity-dashboard` container (velocity-agent
+  stack) has leaked 2482 zombie python children on the NAS. Needs its own fix.

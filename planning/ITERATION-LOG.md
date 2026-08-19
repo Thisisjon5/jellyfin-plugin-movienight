@@ -346,3 +346,115 @@ natural end), Roku/Xbox/web-led; Android participates only if 1c's phone
 experiments (integrated player off / quality cap) pan out earlier. Also
 pending: Roku periodic-stutter forensics (FFmpeg session logs preserved
 from arc 7); remuxer timestamp-continuity probe (1c).
+
+## Arc 9 — 2026-08-18 evening: the Tuesday soak FAILED, and why
+
+Roadmap §2 (movie-length soak) run for real: **The Creator (2023)**, three
+clients at once (Xbox + Roku + web) on v0.3.31. All three froze. Verdict:
+**FAIL**, with a root cause that invalidates the delivery half of switcher v3.
+
+### What was NOT wrong
+
+Jellyfin never crashed (10.11.6, 23 ms API responses throughout). The NAS never
+went down. The feeder never died. `SwitcherProcessCount` stayed at 1 — our side
+of the pipeline is genuinely N-independent, as designed.
+
+### The measurement that found it
+
+All three client-side processes were `-c copy` remux (`q=-1.0`), running at:
+
+```
+0.915x    0.933x    0.927x
+```
+
+A copy remux cannot be CPU-bound. A copy at 0.92x is **starved by its input**.
+And 22 fps / 23.976 fps = 0.918 — the number matches exactly. All three read
+the same shared `stream.ts`, so all three starved together. That is why they
+froze simultaneously rather than one at a time.
+
+### Root cause: O(N) disk on a single spindle
+
+Jellyfin's per-client ffmpeg (one per session, always, even with matching
+codecs) is launched as:
+
+```
+-f hls -i .../master.m3u8  -codec:v:0 copy -codec:a:0 copy
+-f hls -hls_segment_filename /config/cache/transcodes/<session>%d.ts
+-hls_playlist_type event -hls_list_size 0
+```
+
+`-hls_list_size 0` + `playlist_type event` = **segments are never deleted**.
+Each client accumulates the entire broadcast on disk (~3.9 GB per client for a
+2h film). Three clients wrote ~12 GB continuously while the feeder read the
+38.2 Mbps source — all on ONE 7200rpm spindle.
+
+Feed heartbeat byte-deltas tell the story the printed cumulative kbps hides:
+
+```
+0-841s      ~4260 kbps, heartbeats exactly 60s apart   healthy
+841->952s    2018 kbps, 111s gap                       collapsing
+1012->1110s   988 kbps,  98s gap                       worst
+1110->1170s 10209 kbps                                 burst as clients died
+1170->1350s  ~4270 kbps, 60s apart                     ZERO viewers, perfect
+```
+
+The feed recovered the instant the clients died, on the same 38.2 Mbps source,
+same feeder pid (8520, never restarted). Source bitrate is an **amplifier**,
+not the cause; client-count contention is the cause.
+
+### NAS state during the failure
+
+```
+load        11.4 / 12.7 / 15.8 on 4 cores      iowait 38.8% (4.4% idle)
+RAM         5819 / 7691 MB                     swap 5293 / 5892 MB
+disk        ONE 7200rpm 8TB WD (ROTA=1), /volume1 92% full
+zombies     2482
+```
+
+`/System/Logs` (a directory listing) took **23.4 s** while the API answered in
+23 ms — CPU and network fine, disk saturated. Load fell to 2.16 once everything
+was stopped.
+
+**The 2482 zombies are NOT ours** — every one is parented by the
+`velocity-dashboard` container (velocity-agent stack) leaking unreaped python
+children. Separate bug, own ticket, but it contributed to the box's baseline.
+
+### The prediction that was never verified
+
+DECISIONS.md 2026-08-14 recorded: *"one encoder, Jellyfin fans out. Verify pid
+count stays 1 with a second real client when convenient."* That verification
+never happened. It was **half right**: the upstream connection IS shared, but
+each client still gets its own downstream ffmpeg. The unverified half is
+exactly what failed. Flagged-but-unverified assumptions cost a movie night.
+
+### Spike: does serving HLS avoid the per-client hop? NO
+
+Zero code needed — the old Phase-2 HLS path (`POST /MovieNight/api/golive`) is
+still present and did not bit-rot. Baseline **2** encoder processes with no
+clients; **3** with one client tuned. Jellyfin interposed a per-client ffmpeg
+even though the codecs already matched exactly and it was doing a pure `copy`.
+This also retroactively explains why spikes 3-6 died: same hop.
+
+### Spike: server-driven playstate on VOD (approach 2)? NO on Roku
+
+```
+                    at pause      +~15s
+Xbox     paused=True   285.3s  ->  285.3s     frozen. honored.
+Roku     paused=False  286.0s  ->  302.0s     kept playing. ignored.
+```
+
+Both returned HTTP 204 — the server dispatched both. Roku reports
+`SupportsMediaControl: false` and meant it. Roku is a required client, and this
+is client-side code no server plugin can change. SPEC §21's rejection of
+SyncPlay was correct, and now the mechanism is documented rather than inferred.
+
+By-product worth keeping: both clients played a normal library item via
+`PlayMethod: DirectPlay` — zero server-side ffmpeg. Clients WILL pull media
+directly when negotiation allows it; the interposition is specific to Live TV,
+not a universal law. That is the premise the next design rests on.
+
+### Where the next session starts
+
+`planning/DESIGN-abr-ladder.md` — designed and ruled, gating spike not yet run.
+Do the gate first: minimal custom `ITunerHost` -> static pre-generated ladder ->
+one client -> count ffmpeg processes. Everything else is blocked on that answer.
