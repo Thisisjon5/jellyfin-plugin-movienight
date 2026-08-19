@@ -28,6 +28,7 @@ public class MovieNightDebugController : ControllerBase
     private readonly BroadcastManager _broadcastManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IServerApplicationHost _appHost;
+    private readonly T0Gate _t0Gate;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightDebugController"/> class.
@@ -36,12 +37,66 @@ public class MovieNightDebugController : ControllerBase
     /// <param name="broadcastManager">Used to drive the switcher spike.</param>
     /// <param name="libraryManager">Used to resolve item ids for the switcher v2 session.</param>
     /// <param name="appHost">Used to build the loopback feed URL for switcher v2.</param>
-    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager, ILibraryManager libraryManager, IServerApplicationHost appHost)
+    /// <param name="t0Gate">Used to build and measure the T0 gate spike.</param>
+    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager, ILibraryManager libraryManager, IServerApplicationHost appHost, T0Gate t0Gate)
     {
         _sessionManager = sessionManager;
         _broadcastManager = broadcastManager;
         _libraryManager = libraryManager;
         _appHost = appHost;
+        _t0Gate = t0Gate;
+    }
+
+    /// <summary>
+    /// T0 GATE SPIKE: generates the static three-rung ladder the gate tunes. Run once before
+    /// testing; takes a while (three software x264 rungs) and writes ~30 MB per minute of ladder.
+    /// </summary>
+    /// <param name="seconds">Ladder duration, 30-900 (default 300).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>ffmpeg exit code, per-rung segment counts, and stderr.</returns>
+    [HttpPost("t0/build-ladder")]
+    public async Task<ActionResult> T0BuildLadder([FromQuery] int seconds, CancellationToken cancellationToken)
+        => Ok(await _t0Gate.BuildLadderAsync(seconds == 0 ? 300 : seconds, cancellationToken).ConfigureAwait(false));
+
+    /// <summary>
+    /// T0 GATE SPIKE: the gate's instrument. Shows whether the ladder exists and, crucially, which
+    /// remote addresses have fetched its playlists and segments - the server's own address only
+    /// means Jellyfin is still sitting in the middle; the viewer's address means the client is
+    /// pulling directly and the per-client hop is gone.
+    /// </summary>
+    /// <returns>Ladder state plus the recorded fetches and tuner-host calls.</returns>
+    [HttpGet("t0/status")]
+    public ActionResult T0Status() => Ok(_t0Gate.GetStatus());
+
+    /// <summary>
+    /// T0 GATE SPIKE: clears recorded hits, so one tune attempt is measured without the previous
+    /// attempt's noise. Call immediately before each tune.
+    /// </summary>
+    /// <returns>200.</returns>
+    [HttpPost("t0/reset")]
+    public ActionResult T0Reset()
+    {
+        _t0Gate.ResetHits();
+        return Ok();
+    }
+
+    /// <summary>
+    /// T0 GATE SPIKE: switches how the ladder URL is spelled in the media source, so both
+    /// candidate spellings can be tried without a new plugin release (each one costs a NAS restart
+    /// cycle).
+    /// </summary>
+    /// <param name="mode">"relative" (default) or "loopback".</param>
+    /// <returns>The mode now in effect, or 400.</returns>
+    [HttpPost("t0/mode")]
+    public ActionResult T0Mode([FromQuery] string mode)
+    {
+        if (!string.Equals(mode, "relative", StringComparison.Ordinal) && !string.Equals(mode, "loopback", StringComparison.Ordinal))
+        {
+            return BadRequest("mode must be 'relative' or 'loopback'");
+        }
+
+        _t0Gate.UrlMode = mode;
+        return Ok(new { _t0Gate.UrlMode });
     }
 
     /// <summary>

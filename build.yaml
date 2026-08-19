@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.31.0"
+version: "0.3.32.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,27 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.3.32.0: T0 gate spike for the ABR-ladder direction
+  (planning/DESIGN-abr-ladder.md §8, T0) - the one measurement that decides
+  whether Live TV delivery can be made O(1) in viewer count at all. The
+  2026-08-18 soak failed because Jellyfin's Live TV path spawns one ffmpeg
+  per client even for a pure copy, which both writes the whole broadcast to
+  disk per viewer and destroys the sliding window. This release adds a
+  custom ITunerHost that advertises one channel ("Movie Night (T0 gate)",
+  channel 901) whose media source declares SupportsTranscoding=false and
+  RequiresOpening=false, pointing at a pre-generated STATIC three-rung HLS
+  ladder - no feeder, no live pipeline, no muxer, so nothing but the
+  question itself can fail. POST /MovieNight/api/debug/t0/build-ladder
+  generates the ladder (synthetic testsrc/tone, software x264, one fixed
+  closed GOP shared by all three rungs); GET .../t0/status is the
+  instrument, recording which remote address actually fetched each playlist
+  and segment - the server's own address means Jellyfin is still in the
+  middle, the viewer's address means the client is pulling directly and the
+  per-client hop is gone. Jellyfin calling GetChannelStream at all is
+  recorded as its own failure signal. Spike-only: the ladder route is
+  anonymous (guarded by an exact-name whitelist, unit-tested) rather than
+  authed, which is M3's job once the gate passes. Nothing in the existing
+  v3 pipeline is touched.
   0.3.31.0: Zero-viewer buffer-echo fix (roadmap 1b, ruled from the
   2026-08-16 mini-soak's headline finding). When every viewer left the
   channel, the feeder ffmpeg blocked on its full stdout pipe while its -re

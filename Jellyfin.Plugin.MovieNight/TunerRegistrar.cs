@@ -128,5 +128,37 @@ public class TunerRegistrar : IHostedService
         {
             _logger.LogError(ex, "Movie Night: failed to register tuner/listings provider");
         }
+
+        await RegisterT0GateTunerAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// T0 GATE SPIKE (planning/DESIGN-abr-ladder.md §8). Persists a tuner-host entry of the gate
+    /// host's own type. The host is already in DI, but Live TV keys channels to a configured
+    /// tuner entry - without one, its channel can be dropped before it ever reaches the guide.
+    /// Failure here must not take the real M3U tuner down with it, hence its own try/catch.
+    /// Remove with the spike.
+    /// </summary>
+    private async Task RegisterT0GateTunerAsync()
+    {
+        try
+        {
+            var liveTvOptions = (LiveTvOptions)_configurationManager.GetConfiguration(LiveTvConfigKey);
+            var existing = liveTvOptions.TunerHosts
+                .FirstOrDefault(t => string.Equals(t.Type, T0GateTunerHost.TunerType, StringComparison.Ordinal));
+
+            var info = existing ?? new TunerHostInfo();
+            info.Type = T0GateTunerHost.TunerType;
+            info.Url = T0GateTunerHost.TunerType;
+            info.FriendlyName = "Movie Night T0 gate";
+            info.TunerCount = 0;
+
+            await _tunerHostManager.SaveTunerHost(info).ConfigureAwait(false);
+            _logger.LogInformation("Movie Night T0: registered gate tuner host");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Movie Night T0: failed to register gate tuner host");
+        }
     }
 }

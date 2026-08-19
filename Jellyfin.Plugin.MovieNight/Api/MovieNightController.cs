@@ -45,6 +45,7 @@ public class MovieNightController : ControllerBase
 
     private readonly IServerApplicationHost _appHost;
     private readonly BroadcastManager _broadcastManager;
+    private readonly T0Gate _t0Gate;
     private readonly ILogger<MovieNightController> _logger;
 
     /// <summary>
@@ -52,12 +53,52 @@ public class MovieNightController : ControllerBase
     /// </summary>
     /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
     /// <param name="broadcastManager">Source of truth for whether a broadcast is live and where its HLS output lives.</param>
+    /// <param name="t0Gate">T0 gate spike: owns the static ladder and records who fetches it.</param>
     /// <param name="logger">Logger (feed copy-loop instrumentation).</param>
-    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager, ILogger<MovieNightController> logger)
+    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager, T0Gate t0Gate, ILogger<MovieNightController> logger)
     {
         _appHost = appHost;
         _broadcastManager = broadcastManager;
+        _t0Gate = t0Gate;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// T0 GATE SPIKE (planning/DESIGN-abr-ladder.md §8): serves the pre-generated static ladder -
+    /// <c>master.m3u8</c>, the three per-rung <c>index.m3u8</c> files and their segments.
+    /// <para>
+    /// Deliberately a single catch-all action rather than one literal plus one parameterized
+    /// route: per CLAUDE.md, two routes on this controller that can match the same URL shape let
+    /// the parameterized one shadow the literal one. Every request is dispatched internally
+    /// instead, and <see cref="T0Gate.ResolveFile"/> is the only thing that decides what exists.
+    /// </para>
+    /// <para>
+    /// No loopback check here, unlike every other route on this controller - the whole point of the
+    /// gate is that the CLIENT fetches these directly. ponytail: anonymous for the spike; M3
+    /// replaces this with Jellyfin's own [Authorize] once the gate has passed, per the design's
+    /// §4(F) revision of SPEC §148.
+    /// </para>
+    /// </summary>
+    /// <param name="path">Path below <c>stream/hls/</c>, e.g. <c>master.m3u8</c> or <c>v1/seg_7.ts</c>.</param>
+    /// <returns>The requested ladder file, or 404.</returns>
+    [HttpGet("stream/hls/{**path}")]
+    public IActionResult GetT0LadderFile([FromRoute] string path)
+    {
+        var fullPath = _t0Gate.ResolveFile(path);
+        _t0Gate.RecordHit(
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString(),
+            path,
+            fullPath is not null);
+
+        if (fullPath is null)
+        {
+            return NotFound();
+        }
+
+        return path.EndsWith(".m3u8", StringComparison.Ordinal)
+            ? PhysicalFile(fullPath, "application/vnd.apple.mpegurl")
+            : PhysicalFile(fullPath, "video/mp2t");
     }
 
     /// <summary>

@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.32.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.32.0/jellyfin-plugin-movienight_0.3.32.0.zip",
+                "checksum": "877f49749209fbf235099fee8daee088",
+                "timestamp": "2026-08-19T19:15:14Z",
+                "changelog": "T0 gate spike for the ABR-ladder direction: a custom ITunerHost advertising one channel (\"Movie Night (T0 gate)\", 901) whose media source declares SupportsTranscoding=false and RequiresOpening=false, pointing at a pre-generated static three-rung HLS ladder. Answers the one question that decides whether Live TV delivery can be O(1) in viewer count - does Jellyfin hand the ladder URL to the client, or insert its own per-client ffmpeg remux hop. Debug endpoints build the ladder and record which remote address actually fetched each playlist and segment. Spike only; the existing v3 broadcast pipeline is untouched."
+            },
+            {
                 "version": "0.3.31.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.31.0/jellyfin-plugin-movienight_0.3.31.0.zip",
@@ -325,7 +333,7 @@
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.1.0.0/jellyfin-plugin-movienight_0.1.0.0.zip",
                 "checksum": "9e196262179413c86e30e268b3d9e48e",
                 "timestamp": "2026-08-13T16:10:51Z",
-                "changelog": "Phase 0 scaffold. Not functional yet \u00e2\u20ac\u201d empty config page only."
+                "changelog": "Phase 0 scaffold. Not functional yet â€” empty config page only."
             }
         ]
     }
