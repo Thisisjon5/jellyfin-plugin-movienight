@@ -4,3 +4,6 @@ obj/
 .idea/
 artifacts
 dist/
+
+# packaged plugin releases (built artifacts, published via gh release)
+jellyfin-plugin-movienight_*.zip
