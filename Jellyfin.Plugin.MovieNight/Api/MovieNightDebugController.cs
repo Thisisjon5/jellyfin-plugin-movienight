@@ -81,22 +81,63 @@ public class MovieNightDebugController : ControllerBase
     }
 
     /// <summary>
-    /// T0 GATE SPIKE: switches how the ladder URL is spelled in the media source, so both
-    /// candidate spellings can be tried without a new plugin release (each one costs a NAS restart
-    /// cycle).
+    /// T0 GATE SPIKE: sets the media-source fields the gate turns on, without a new plugin release.
+    /// <para>
+    /// This exists because of how the first gate run (v0.3.32.0) went: it failed on a relative URL
+    /// AND on <c>Container="hls"</c> at the same time, which are two independent variables, and a
+    /// release-per-experiment loop to separate them would cost a NAS restart each (~4 minutes on
+    /// this box). Same lesson as the encode-probe endpoint in CLAUDE.md - make the knob remote
+    /// before running the experiment.
+    /// </para>
+    /// Every parameter is optional; omitted ones keep their current value.
     /// </summary>
-    /// <param name="mode">"relative" (default) or "loopback".</param>
-    /// <returns>The mode now in effect, or 400.</returns>
-    [HttpPost("t0/mode")]
-    public ActionResult T0Mode([FromQuery] string mode)
+    /// <param name="baseUrl">Absolute base for the ladder URL (e.g. http://100.108.120.127:8096), "loopback" for the server's own address, or "" for a relative URL.</param>
+    /// <param name="container">Declared container, e.g. "ts", "mpegts", "hls", or "" for none.</param>
+    /// <param name="directPlay">SupportsDirectPlay.</param>
+    /// <param name="directStream">SupportsDirectStream.</param>
+    /// <param name="supportsTranscoding">SupportsTranscoding.</param>
+    /// <param name="requiresOpening">RequiresOpening.</param>
+    /// <returns>The settings now in effect.</returns>
+    [HttpPost("t0/source")]
+    public ActionResult T0Source(
+        [FromQuery] string? baseUrl,
+        [FromQuery] string? container,
+        [FromQuery] bool? directPlay,
+        [FromQuery] bool? directStream,
+        [FromQuery] bool? supportsTranscoding,
+        [FromQuery] bool? requiresOpening)
     {
-        if (!string.Equals(mode, "relative", StringComparison.Ordinal) && !string.Equals(mode, "loopback", StringComparison.Ordinal))
+        if (baseUrl is not null)
         {
-            return BadRequest("mode must be 'relative' or 'loopback'");
+            _t0Gate.SourceBaseUrl = baseUrl;
         }
 
-        _t0Gate.UrlMode = mode;
-        return Ok(new { _t0Gate.UrlMode });
+        if (container is not null)
+        {
+            _t0Gate.SourceContainer = container;
+        }
+
+        if (directPlay.HasValue)
+        {
+            _t0Gate.SourceSupportsDirectPlay = directPlay.Value;
+        }
+
+        if (directStream.HasValue)
+        {
+            _t0Gate.SourceSupportsDirectStream = directStream.Value;
+        }
+
+        if (supportsTranscoding.HasValue)
+        {
+            _t0Gate.SourceSupportsTranscoding = supportsTranscoding.Value;
+        }
+
+        if (requiresOpening.HasValue)
+        {
+            _t0Gate.SourceRequiresOpening = requiresOpening.Value;
+        }
+
+        return Ok(_t0Gate.GetSourceSettings());
     }
 
     /// <summary>

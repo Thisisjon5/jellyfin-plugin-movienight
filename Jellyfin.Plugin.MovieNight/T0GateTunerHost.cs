@@ -99,11 +99,15 @@ public class T0GateTunerHost : ITunerHost
     /// <inheritdoc />
     public Task<List<MediaSourceInfo>> GetChannelStreamMediaSources(string channelId, CancellationToken cancellationToken)
     {
-        _gate.RecordTunerEvent(FormattableString.Invariant($"GetChannelStreamMediaSources({channelId}) mode={_gate.UrlMode}"));
+        // A base URL of "loopback" is expanded here rather than being stored, so the knob can be
+        // set without knowing the server's own port.
+        var baseUrl = string.Equals(_gate.SourceBaseUrl, "loopback", StringComparison.OrdinalIgnoreCase)
+            ? string.Create(CultureInfo.InvariantCulture, $"http://127.0.0.1:{_appHost.HttpPort}")
+            : _gate.SourceBaseUrl.TrimEnd('/');
+        var url = baseUrl + LadderPath;
 
-        var url = string.Equals(_gate.UrlMode, "loopback", StringComparison.OrdinalIgnoreCase)
-            ? string.Create(CultureInfo.InvariantCulture, $"http://127.0.0.1:{_appHost.HttpPort}{LadderPath}")
-            : LadderPath;
+        _gate.RecordTunerEvent(FormattableString.Invariant(
+            $"GetChannelStreamMediaSources({channelId}) url={url} container={_gate.SourceContainer}"));
 
         var source = new MediaSourceInfo
         {
@@ -111,7 +115,7 @@ public class T0GateTunerHost : ITunerHost
             Path = url,
             TranscodingUrl = url,
             Protocol = MediaProtocol.Http,
-            Container = "hls",
+            Container = _gate.SourceContainer,
             TranscodingContainer = "ts",
 
             // ponytail: no TranscodingSubProtocol. With SupportsTranscoding=false there is no
@@ -125,15 +129,15 @@ public class T0GateTunerHost : ITunerHost
             // no fallback hop to take"; UseMostCompatibleTranscodingProfile=true is what the failed
             // 2026-08-18 soak ran with, and is believed to be part of why every client got its own
             // ffmpeg.
-            SupportsDirectPlay = true,
-            SupportsDirectStream = true,
-            SupportsTranscoding = false,
+            SupportsDirectPlay = _gate.SourceSupportsDirectPlay,
+            SupportsDirectStream = _gate.SourceSupportsDirectStream,
+            SupportsTranscoding = _gate.SourceSupportsTranscoding,
             UseMostCompatibleTranscodingProfile = false,
 
             // Nothing to open or close server-side: the client is supposed to fetch the playlist
             // itself. If Jellyfin ignores this and calls GetChannelStream anyway, that call is
             // recorded and is itself a gate-failure signal.
-            RequiresOpening = false,
+            RequiresOpening = _gate.SourceRequiresOpening,
             RequiresClosing = false,
             SupportsProbing = false,
 

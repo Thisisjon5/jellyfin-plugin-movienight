@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.3.33.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.33.0/jellyfin-plugin-movienight_0.3.33.0.zip",
+                "checksum": "9bfbf53dac1b5dbf97bceece18b0a65f",
+                "timestamp": "2026-08-19T20:02:50Z",
+                "changelog": "Makes the T0 gate's media-source negotiation runtime-tunable via POST t0/source (baseUrl, container, and the four booleans), after the first gate run failed on a relative URL and Container=\"hls\" simultaneously and could not separate them. Default container is now \"ts\". Established and standing from the first run: RequiresOpening=false is honoured, and the static ladder itself is sound."
+            },
+            {
                 "version": "0.3.32.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.32.0/jellyfin-plugin-movienight_0.3.32.0.zip",

@@ -66,20 +66,60 @@ public sealed class T0Gate
     public string LadderDirectory { get; }
 
     /// <summary>
-    /// Gets or sets how the tuner host spells the ladder URL it hands Jellyfin. Runtime-settable
-    /// (POST .../t0/mode) purely so both candidate spellings can be tried on ONE install: each
-    /// plugin release costs a NAS restart cycle, and which spelling Jellyfin forwards intact to a
-    /// remote client is exactly the sort of thing the gate exists to discover.
-    /// <c>relative</c> = "/MovieNight/..." (Jellyfin's own convention for transcode URLs);
-    /// <c>loopback</c> = the server's own 127.0.0.1 address, which a remote client cannot reach -
-    /// so if playback works in that mode, Jellyfin fetched on the client's behalf.
+    /// Gets or sets the base URL prefixed to the ladder path. Empty means a relative URL.
+    /// <para>
+    /// Runtime-settable (POST .../t0/source), and that is the whole point: the first gate run
+    /// (v0.3.32.0, 2026-08-19) died on a RELATIVE url - Jellyfin handed "/MovieNight/stream/hls/
+    /// master.m3u8" to ffmpeg as a FILE path, which exited 254 in 30ms, and no fetch of the ladder
+    /// ever happened. A base URL must be absolute AND reachable by the client, or the measurement
+    /// is meaningless. Loopback proves only that the server fetched it.
+    /// </para>
     /// </summary>
-    public string UrlMode { get; set; } = "relative";
+    public string SourceBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the media source's declared container. Runtime-settable.
+    /// <para>
+    /// The first gate run returned "hls" and Jellyfin answered with
+    /// <c>TranscodeReasons: ContainerNotSupported</c> - no device profile lists "hls" as a
+    /// DIRECT-PLAY container (clients list it as a TRANSCODING target instead), so the profile
+    /// matcher rejected direct play before <c>SupportsTranscoding=false</c> was ever consulted.
+    /// This is the field most likely to decide the gate, hence a knob rather than a constant.
+    /// </para>
+    /// </summary>
+    public string SourceContainer { get; set; } = "ts";
+
+    /// <summary>Gets or sets a value indicating whether the media source declares SupportsDirectPlay. Runtime-settable.</summary>
+    public bool SourceSupportsDirectPlay { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the media source declares SupportsDirectStream. Runtime-settable.</summary>
+    public bool SourceSupportsDirectStream { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the media source declares SupportsTranscoding. Runtime-settable.</summary>
+    public bool SourceSupportsTranscoding { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the media source declares RequiresOpening. Runtime-settable.</summary>
+    public bool SourceRequiresOpening { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether the static ladder has been generated.
     /// </summary>
     public bool LadderExists => File.Exists(Path.Combine(LadderDirectory, "master.m3u8"));
+
+    /// <summary>
+    /// Gets the current media-source knob values, for <see cref="GetStatus"/> and the
+    /// <c>t0/source</c> endpoint.
+    /// </summary>
+    /// <returns>The knobs as a flat object.</returns>
+    public object GetSourceSettings() => new
+    {
+        SourceBaseUrl,
+        SourceContainer,
+        SourceSupportsDirectPlay,
+        SourceSupportsDirectStream,
+        SourceSupportsTranscoding,
+        SourceRequiresOpening,
+    };
 
     /// <summary>
     /// Generates the static ladder: three rungs of synthetic video and tone from one ffmpeg
@@ -292,7 +332,7 @@ public sealed class T0Gate
             {
                 LadderDirectory,
                 LadderReady = LadderExists,
-                UrlMode,
+                Source = GetSourceSettings(),
                 TotalHits = _totalHits,
                 NotFoundHits = _notFoundHits,
                 HitsByRemote = _hitsByRemote.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
