@@ -132,6 +132,21 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   PlaybackInfo endpoint throws NullReferenceException on every tune attempt —
   the client must hard-reload (F5) before it can tune again. Cost two
   misdiagnosed "v3 is broken" rounds on 2026-08-15.
+- **A `MediaSourceInfo` with `Container = "hls"` will never DirectPlay** —
+  Jellyfin answers `TranscodeReasons: ContainerNotSupported` and takes its own
+  per-client remux hop. Device profiles list `hls` as a transcoding TARGET, not
+  a direct-play container; use **`"ts"`**. This single field is what moved the
+  T0 gate from failing to passing (2026-08-19) — `SupportsTranscoding = false`
+  did NOT do the work, because the profile matcher rejects direct play before
+  that flag is ever consulted. Related: a media source's `Path`/`TranscodingUrl`
+  must be an **absolute** URL reachable by the client — a relative one is handed
+  to ffmpeg as a file path (`-f hls -i "/MovieNight/..."` → exit 254 in 30ms).
+- **The "Update Plugins" scheduled task is currently broken server-wide on this
+  NAS** — `IOException` on `Jellyfin Tweaks_4.0.0.0/thumb.png` ("being used by
+  another process") thrown from `PopulateManifest` inside `GetAvailablePackages`
+  aborts the entire package scan, so NO plugin can update through it. Install
+  directly instead: `POST /Packages/Installed/{name}?version=X.Y.Z.W` (204),
+  then `POST /System/Restart`. Verify the load in the logs as always.
 - **Jellyfin's log files are readable over the API** (`GET /System/Logs`,
   `GET /System/Logs/Log?name=...`) — full server + per-ffmpeg logs without
   NAS MCP or SSH. Quick Connect can be authorized server-side

@@ -458,3 +458,106 @@ not a universal law. That is the premise the next design rests on.
 `planning/DESIGN-abr-ladder.md` — designed and ruled, gating spike not yet run.
 Do the gate first: minimal custom `ITunerHost` -> static pre-generated ladder ->
 one client -> count ffmpeg processes. Everything else is blocked on that answer.
+
+---
+
+## Arc 10 (2026-08-19) — T0 GATE PASSED: Jellyfin will hand the URL to the client
+
+The gate from `DESIGN-abr-ladder.md` §8. Built as v0.3.32.0, answered on
+v0.3.33.0. **Result: PASS**, on real Roku hardware.
+
+### What was built
+
+A deliberately minimal spike — no feeder, no live pipeline, no muxer, no QSV,
+so that nothing except the question itself could fail:
+
+- `T0Gate` — generates a static three-rung HLS ladder (synthetic testsrc/tone,
+  software x264, one fixed closed GOP across all rungs) and instruments every
+  fetch of it: remote address, user agent, path, hit/404.
+- `T0GateTunerHost` — a custom `ITunerHost` advertising one channel on 901.
+- `GET /MovieNight/stream/hls/{**path}` — anonymous for the spike, guarded by an
+  exact-name whitelist (unit-tested against traversal and near-miss names).
+
+### The first run failed on TWO of my own bugs at once
+
+Both were field-value choices, not facts about Jellyfin, which is why one tune
+could not separate them:
+
+1. **Relative URL.** `Path`/`TranscodingUrl` were `/MovieNight/stream/hls/
+   master.m3u8`. Jellyfin passed that to ffmpeg as a FILE path:
+   `-f hls -i "/MovieNight/stream/hls/master.m3u8"` → exit 254 in 30 ms.
+   `TotalHits: 0` — nothing ever fetched the ladder, not even the server.
+2. **`Container = "hls"`.** Jellyfin answered `TranscodeReasons:
+   ContainerNotSupported`. No device profile lists `hls` as a DIRECT-PLAY
+   container — clients list it as a transcoding TARGET — so the profile matcher
+   rejected direct play before `SupportsTranscoding=false` was ever consulted.
+
+Lesson, already learned once during the QSV keyframe hunt and evidently not
+learned well enough: **make the knob remote BEFORE running the experiment.**
+v0.3.33.0 moved `baseUrl`, `container` and the four booleans to a runtime
+endpoint (`POST t0/source`), turning a ~4-minute NAS restart per hypothesis into
+a curl call. That change is what made the second run cheap.
+
+### The PASS, measured
+
+`container=ts`, `baseUrl=http://192.168.68.118:8096`, one Roku Ultra tuned:
+
+| criterion | result |
+|---|---|
+| new ffmpeg processes | **0** (identical to baseline) |
+| `PlayMethod` | **DirectPlay** |
+| `TranscodeReasons` | **None** |
+| ladder fetches | **56, all from 192.168.68.121** (the Roku), UA `Roku/DVP-15.3` |
+| 404s | 0 |
+
+`container=ts` was the unlock, not `SupportsTranscoding=false`. Worth
+remembering which field did the work.
+
+### Free result: the Roku did ABR unprompted
+
+```
+20:10:07  v1/index.m3u8   started on rung 1
+20:10:17  v2/index.m3u8   dropped to rung 2
+20:10:31  v0/seg_39..47   climbed to rung 0, pulled 9 segments in ~1s
+```
+
+Three rung switches, no one constraining anything, on the hardest client. T7's
+question answered affirmatively in passing, and the GOP alignment is real.
+
+### Also confirmed / also learned
+
+- **`RequiresOpening=false` IS honoured** — `GetChannelStream` was never called
+  across either run. Jellyfin does not open a server-side live stream for this
+  source.
+- **The static ladder is sound**, proven independently of any client: Jellyfin's
+  own ffmpeg read the master playlist through the plugin route, selected rung
+  v0, pulled segments over HTTP and decoded 240 frames at 187x, exit 0. This
+  separated "our ladder is broken" from "Jellyfin insists on transcoding"
+  without costing a human tune.
+- **VOD behaviour, and why the sliding window is load-bearing.** The T0 ladder is
+  `PLAYLIST-TYPE:VOD` + `ENDLIST`, so there is no live edge. The Roku fetched
+  all 75 segments within ~60 s while its playhead sat at 270 s of 300 s — it
+  raced to the end at disk speed. Nothing in T0 tests live-edge join, latency,
+  or straggler convergence; those need M2's sliding window (T3) and the
+  load-bearing 404 (T6).
+
+### What this does NOT establish
+
+- **Roku only.** Android failed the first (buggy) round and was not retried; web
+  and Xbox untested. The compatibility matrix has one cell filled.
+- **The LAN base URL is a scaffold.** It passed with `http://192.168.68.118:8096`
+  hardcoded. Remote viewers over tailscale will not reach that — the real tuner
+  host (M4) must derive a per-client address (`GetSmartApiUrl`) rather than hold
+  a constant.
+
+### Unrelated, found on the way
+
+- `Update Plugins` is **failing server-wide** on this NAS:
+  `IOException: ... 'Jellyfin Tweaks_4.0.0.0/thumb.png' because it is being used
+  by another process`, thrown from `PopulateManifest` inside
+  `GetAvailablePackages`, which aborts the whole scan. No plugin can update via
+  the task. Workaround used throughout: `POST /Packages/Installed/{name}?version=`.
+- The `velocity-dashboard` zombie leak (2482 on 08-18) had reached **2533** with
+  the box at load 7.24 / **64.2 % iowait** / 91 % swap. The container was
+  recreated mid-session, which reaped all of them: 0 zombies, load 2.33, iowait
+  8.7 %. Root cause unfixed — it accrues ~50/day, so it will be back.

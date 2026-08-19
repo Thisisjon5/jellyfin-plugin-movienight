@@ -516,3 +516,32 @@ web/repo-fetch access, not available in this conversation.
   constraint; encode capacity and box health are.
 - **Unrelated bug found:** the `velocity-dashboard` container (velocity-agent
   stack) has leaked 2482 zombie python children on the NAS. Needs its own fix.
+
+## 2026-08-19 — M0 GATE PASSED: Live TV delivery can be O(1)
+
+- **T0 PASSED on real Roku hardware.** A custom `ITunerHost` returning a
+  `MediaSourceInfo` that points at our own HLS ladder gets `PlayMethod:
+  DirectPlay`, `TranscodeReasons: None`, and **zero** new ffmpeg processes; all
+  56 ladder fetches came from the Roku's own address (`192.168.68.121`, UA
+  `Roku/DVP-15.3`). The server is not in the media path at all. Full evidence:
+  ITERATION-LOG arc 10.
+- **Consequence: `DESIGN-abr-ladder.md` M0 is done. M1 and M3 are unblocked** and
+  can proceed in parallel, per the design's dependency graph.
+- **`Container = "ts"` is what unlocked direct play, not `SupportsTranscoding =
+  false`.** With `Container = "hls"` Jellyfin returns `ContainerNotSupported` —
+  clients list `hls` as a transcoding TARGET, never a direct-play container — and
+  rejects direct play before the transcoding flag is consulted. The design's
+  §4(G) field table should be read with this correction.
+- **`RequiresOpening = false` is honoured**: `GetChannelStream` is never called,
+  so Jellyfin opens no server-side live stream for this source.
+- **NOT yet ruled, deliberately open:**
+  - Client matrix is one cell. Roku passes; Android/web/Xbox untested against a
+    working build.
+  - The gate passed with a hardcoded LAN base URL. M4 must derive a per-client
+    address (`GetSmartApiUrl`); a constant will not reach remote tailscale
+    viewers. This is new work not itemised in the design's milestones.
+  - T0 says nothing about live-edge behaviour, latency or straggler
+    convergence — its ladder is VOD with an `ENDLIST`. Those remain T3/T6.
+- **Spike hygiene:** the T0 ladder route is anonymous by design (an auth failure
+  would be indistinguishable from a gate failure). M3 restores `[Authorize]`, and
+  the whole T0 spike gets deleted once M4's real tuner host lands.
