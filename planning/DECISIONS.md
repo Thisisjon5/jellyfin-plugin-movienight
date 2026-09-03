@@ -640,3 +640,49 @@ same spot, new viewers land on the live edge, a variety of clients. Plan:
   on a home line); how viewers reach her server (a public URL is required —
   Rokus cannot run tailscale); viewer count and devices; who tests clients at
   her end. These block roadmap step 2, not step 1.
+
+## 2026-09-03 (later) — OPEN QUESTION: cap the ladder at the source's resolution?
+
+**Not ruled. Raised by Jon during the first live Prepare run.** Logged here so it
+does not stay in a chat window.
+
+**What surfaced it:** the first mezzanine ever prepared on real hardware was
+*Afro Samurai* — a DVD-era source, **720x480 MPEG-2, 6.7 Mbps, 29.97 fps**. Both
+the mezzanine (`MezzaninePrep.cs:399-401`) and every ladder rung
+(`LadderCommandBuilder.cs:165-173`) scale to a fixed target height with no
+reference to the input, so this was **upscaled 480p → 720p and re-encoded at
+6 Mbps**. It works, and it ran at 9.5x realtime on QSV, but it spends bitrate
+carrying an upscaled DVD.
+
+**Why it is not just tidiness.** `ROADMAP-2026-09-03.md` names the host's
+**upload bandwidth as the binding constraint** (egress is O(N) over a home
+line). Streaming an upscaled 480p source at 6 Mbps burns that scarce resource
+for no visual gain over sending it near its native resolution. A cap is a
+bandwidth win first and a correctness win second.
+
+**Option A — cap at source (cheap).** Make the scale target
+`min(<rung height>, <source height>)` rather than a constant. In the software
+branch ffmpeg takes an expression directly (`scale=-2:'min(720,ih)'`); the QSV
+and VAAPI branches take fixed integers, so the height would have to be computed
+in C# from the probed source and passed in. Rungs below the source height are
+unaffected. Roughly a one-evening change touching `LadderCommandBuilder` and
+`MezzaninePrep`, plus the bitrate ladder (a capped rung should also carry a
+lower bitrate, or the saving is only partly realised).
+
+**Option B — upscale deliberately, to look better.** Worth separating two
+things. A *better scaler* (lanczos/spline over the default) is nearly free but
+cannot add detail — it mostly avoids softness, and on the QSV path we do not
+control the scaler anyway. *Real* enhancement means an ML upscaler; Jon already
+runs one on the NAS ([[upscale-api]]). Because Prepare is a one-off offline
+pre-encode, that is not architecturally absurd — but a feature-length ML upscale
+is orders of magnitude slower than the 9.5x realtime measured here, and it is a
+separate pipeline, not a filter argument.
+
+**Implementer's read (not a ruling):** A is worth doing and B is not, for V1.
+A protects the constraint the whole design is bounded by; B spends the
+Halloween deadline on picture quality for old sources. If B is ever wanted, it
+belongs as an optional pre-step feeding Prepare a better master, never inside
+the live ladder.
+
+**Blocks nothing.** Step 1 acceptance testing proceeds as-is; a cap changes
+numbers, not architecture.
