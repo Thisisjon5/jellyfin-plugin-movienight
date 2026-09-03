@@ -28,7 +28,7 @@ public class MovieNightDebugController : ControllerBase
     private readonly BroadcastManager _broadcastManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IServerApplicationHost _appHost;
-    private readonly T0Gate _t0Gate;
+    private readonly LiveSourceKnobs _knobs;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieNightDebugController"/> class.
@@ -37,115 +37,74 @@ public class MovieNightDebugController : ControllerBase
     /// <param name="broadcastManager">Used to drive the switcher spike.</param>
     /// <param name="libraryManager">Used to resolve item ids for the switcher v2 session.</param>
     /// <param name="appHost">Used to build the loopback feed URL for switcher v2.</param>
-    /// <param name="t0Gate">Used to build and measure the T0 gate spike.</param>
-    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager, ILibraryManager libraryManager, IServerApplicationHost appHost, T0Gate t0Gate)
+    /// <param name="knobs">Runtime overrides for the live tuner host's media source.</param>
+    public MovieNightDebugController(ISessionManager sessionManager, BroadcastManager broadcastManager, ILibraryManager libraryManager, IServerApplicationHost appHost, LiveSourceKnobs knobs)
     {
         _sessionManager = sessionManager;
         _broadcastManager = broadcastManager;
         _libraryManager = libraryManager;
         _appHost = appHost;
-        _t0Gate = t0Gate;
+        _knobs = knobs;
     }
 
     /// <summary>
-    /// T0 GATE SPIKE: generates the static three-rung ladder the gate tunes. Run once before
-    /// testing; takes a while (three software x264 rungs) and writes ~30 MB per minute of ladder.
+    /// Sets the media-source fields the live tuner host hands out, without a release (the T0 gate
+    /// lesson: a release-per-hypothesis loop costs a ~4 minute NAS restart each). Every parameter
+    /// is optional; omitted ones keep their current value. In-memory; resets on restart.
     /// </summary>
-    /// <param name="seconds">Ladder duration, 30-900 (default 300).</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>ffmpeg exit code, per-rung segment counts, and stderr.</returns>
-    [HttpPost("t0/build-ladder")]
-    public async Task<ActionResult> T0BuildLadder([FromQuery] int seconds, CancellationToken cancellationToken)
-        => Ok(await _t0Gate.BuildLadderAsync(seconds == 0 ? 300 : seconds, cancellationToken).ConfigureAwait(false));
-
-    /// <summary>
-    /// T0 GATE SPIKE: the gate's instrument. Shows whether the ladder exists and, crucially, which
-    /// remote addresses have fetched its playlists and segments - the server's own address only
-    /// means Jellyfin is still sitting in the middle; the viewer's address means the client is
-    /// pulling directly and the per-client hop is gone.
-    /// </summary>
-    /// <returns>Ladder state plus the recorded fetches and tuner-host calls.</returns>
-    [HttpGet("t0/status")]
-    public ActionResult T0Status() => Ok(_t0Gate.GetStatus());
-
-    /// <summary>
-    /// T0 GATE SPIKE: clears recorded hits, so one tune attempt is measured without the previous
-    /// attempt's noise. Call immediately before each tune.
-    /// </summary>
-    /// <returns>200.</returns>
-    [HttpPost("t0/reset")]
-    public ActionResult T0Reset()
-    {
-        _t0Gate.ResetHits();
-        return Ok();
-    }
-
-    /// <summary>
-    /// T0 GATE SPIKE: sets the media-source fields the gate turns on, without a new plugin release.
-    /// <para>
-    /// This exists because of how the first gate run (v0.3.32.0) went: it failed on a relative URL
-    /// AND on <c>Container="hls"</c> at the same time, which are two independent variables, and a
-    /// release-per-experiment loop to separate them would cost a NAS restart each (~4 minutes on
-    /// this box). Same lesson as the encode-probe endpoint in CLAUDE.md - make the knob remote
-    /// before running the experiment.
-    /// </para>
-    /// Every parameter is optional; omitted ones keep their current value.
-    /// </summary>
-    /// <param name="baseUrl">Absolute base for the ladder URL (e.g. http://100.108.120.127:8096), "loopback" for the server's own address, or "" for a relative URL.</param>
-    /// <param name="container">Declared container, e.g. "ts" or "hls". Pass "null" to clear it (an EMPTY query value binds to null and is indistinguishable from "not supplied", which silently no-opped on 2026-08-19).</param>
-    /// <param name="subProtocol">Declared transcoding sub-protocol: "hls" or "http".</param>
+    /// <param name="container">Declared container, e.g. "hls" (default, passed T0) or "ts". Pass "null" to clear (an EMPTY query value binds to null and means "not supplied").</param>
     /// <param name="directPlay">SupportsDirectPlay.</param>
     /// <param name="directStream">SupportsDirectStream.</param>
-    /// <param name="supportsTranscoding">SupportsTranscoding.</param>
-    /// <param name="requiresOpening">RequiresOpening.</param>
-    /// <returns>The settings now in effect.</returns>
-    [HttpPost("t0/source")]
-    public ActionResult T0Source(
-        [FromQuery] string? baseUrl,
+    /// <param name="supportsTranscoding">SupportsTranscoding (default true; T0 passed with false).</param>
+    /// <param name="anonymousRoute">True to hand out the token-less <c>stream/hls-open/</c> URL and open that route. Debug only.</param>
+    /// <param name="baseUrl">Absolute base URL override, e.g. http://192.168.68.118:8096. Pass "null" to clear.</param>
+    /// <returns>The knobs now in effect.</returns>
+    [HttpPost("live/source")]
+    public ActionResult LiveSource(
         [FromQuery] string? container,
-        [FromQuery] string? subProtocol,
         [FromQuery] bool? directPlay,
         [FromQuery] bool? directStream,
         [FromQuery] bool? supportsTranscoding,
-        [FromQuery] bool? requiresOpening)
+        [FromQuery] bool? anonymousRoute,
+        [FromQuery] string? baseUrl)
     {
-        if (baseUrl is not null)
-        {
-            _t0Gate.SourceBaseUrl = baseUrl;
-        }
-
         if (container is not null)
         {
-            _t0Gate.SourceContainer = string.Equals(container, "null", StringComparison.OrdinalIgnoreCase) ? null : container;
-        }
-
-        if (subProtocol is not null)
-        {
-            _t0Gate.SourceSubProtocol = subProtocol;
+            _knobs.Container = string.Equals(container, "null", StringComparison.OrdinalIgnoreCase) ? null : container;
         }
 
         if (directPlay.HasValue)
         {
-            _t0Gate.SourceSupportsDirectPlay = directPlay.Value;
+            _knobs.SupportsDirectPlay = directPlay.Value;
         }
 
         if (directStream.HasValue)
         {
-            _t0Gate.SourceSupportsDirectStream = directStream.Value;
+            _knobs.SupportsDirectStream = directStream.Value;
         }
 
         if (supportsTranscoding.HasValue)
         {
-            _t0Gate.SourceSupportsTranscoding = supportsTranscoding.Value;
+            _knobs.SupportsTranscoding = supportsTranscoding.Value;
         }
 
-        if (requiresOpening.HasValue)
+        if (anonymousRoute.HasValue)
         {
-            _t0Gate.SourceRequiresOpening = requiresOpening.Value;
+            _knobs.UseAnonymousRoute = anonymousRoute.Value;
         }
 
-        return Ok(_t0Gate.GetSourceSettings());
+        if (baseUrl is not null)
+        {
+            _knobs.BaseUrlOverride = string.Equals(baseUrl, "null", StringComparison.OrdinalIgnoreCase) ? null : baseUrl;
+        }
+
+        return Ok(_knobs);
     }
+
+    /// <summary>The live tuner host's media-source knobs currently in effect.</summary>
+    /// <returns>The knobs.</returns>
+    [HttpGet("live/source")]
+    public ActionResult GetLiveSource() => Ok(_knobs);
 
     /// <summary>
     /// Lists every active session's play state - spike 1 (does IsPaused/PositionTicks report for

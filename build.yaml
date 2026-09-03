@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.3.34.0"
+version: "0.4.0.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,30 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.4.0.0: The live pipeline for the Halloween movie nights (planning/ROADMAP-2026-09-03.md
+  step 1: M2 + M3 + M4 of the ABR-ladder design, collapsed). The v3 feeders (movie feeder,
+  slate, feed.ts, position clock, pause/resume) now feed ONE ladder encoder - one ffmpeg
+  reading feed.ts and writing N encoded 720p/480p/360p rungs as sliding-window HLS
+  (4s segments, 6 in the window, delete_segments) - and a real ITunerHost ("Movie Night",
+  channel 900 by default) hands every client an absolute, per-client URL to that ladder
+  with the client's own token appended, so the client pulls playlists and segments directly
+  and no per-client ffmpeg exists (the T0 gate result). Rung count (1-3) and top bitrate are
+  plugin settings (Jon's 2026-09-03 ruling); every rung is encoded, so N=1 is the same code
+  path as N=3 and GOP alignment across rungs is intrinsic. The encoder backend follows
+  Jellyfin's hardware-acceleration setting (qsv proven; nvenc/vaapi/amf present but
+  unproven; libx264 fallback) - the feeder's QSV-only hardcode is gone, the feeder is now a
+  paced copy with audio normalised to AAC 48k stereo. New authed segment route
+  (/MovieNight/stream/hls/*) with the exact-name whitelist, rewriting playlists so the
+  api_key reaches every relative URI. New mezzanine prep (POST /MovieNight/api/prepare):
+  a one-off ahead-of-time 720p h264/AAC mp4 with the chosen subtitle track BURNED IN
+  (text via the subtitles filter, PGS/DVD via overlay), stored under the plugin data path;
+  Go Live uses it when present. Config page rebuilt around the host's flow: search the
+  library, pick the film and a caption track, Prepare, Go Live / Pause / Stop, with a
+  summary of state, position, encoder health and who is fetching the ladder; settings
+  for channel name/number, rungs, bitrate and a public base URL override. The T0 gate
+  spike (T0Gate, T0GateTunerHost, its anonymous route and debug endpoints) is deleted and
+  its stale tuner entry is cleaned up at startup. Unit tests cover the ladder argument
+  builder per backend, the whitelist, the playlist rewrite, and the prep argument builder.
   0.3.34.0: Container becomes nullable, and TranscodingSubProtocol comes
   back. The T0 gate PASSED on Roku with container="ts" (DirectPlay, zero
   ffmpeg, all 56 fetches from the Roku itself) but Android then failed,

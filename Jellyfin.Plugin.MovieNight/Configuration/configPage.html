@@ -5,83 +5,98 @@
     <title>Movie Night</title>
 </head>
 <body>
-    <div id="MovieNightConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox" data-controller="__plugin/configurationpage">
+    <div id="MovieNightConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select" data-controller="__plugin/configurationpage">
         <div data-role="content">
             <div class="content-primary">
-                <h2>Broadcast</h2>
-                <p>
-                    Paste a movie's item ID (visible in its details page URL as
-                    <code>?id=...</code>) and Go Live, then tune
-                    <strong>"Movie Night (switcher spike)"</strong> in Live TV.
-                    Pause swaps every viewer to the slate; Resume returns the
-                    movie ~10s before the pause point. Needs the switcher spike
-                    channel enabled below.
-                </p>
 
+                <h2>1. Pick a movie</h2>
+                <p>Search your library, pick the film, then (optionally) prepare it with captions burned in. Preparing is a one-off encode - do it well before movie night.</p>
                 <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="MovieNightItemId">Item ID</label>
-                    <input id="MovieNightItemId" type="text" is="emby-input" placeholder="e.g. 8a6e5cf0-30f3-420a-a8ce-e7704d690f94" />
+                    <label class="inputLabel inputLabelUnfocused" for="MovieNightSearch">Search movies</label>
+                    <input id="MovieNightSearch" type="text" is="emby-input" placeholder="type part of a title, then Search" />
                 </div>
-
+                <button id="MovieNightSearchButton" is="emby-button" type="button" class="raised block emby-button"><span>Search</span></button>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="MovieNightMovie">Movie</label>
+                    <select id="MovieNightMovie" is="emby-select"></select>
+                </div>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="MovieNightSubtitle">Captions to burn in (needs Prepare)</label>
+                    <select id="MovieNightSubtitle" is="emby-select"><option value="">None</option></select>
+                </div>
                 <div>
-                    <button id="MovieNightGoLive" is="emby-button" type="button" class="raised button-submit block emby-button">
-                        <span>Go Live</span>
-                    </button>
-                    <button id="MovieNightStop" is="emby-button" type="button" class="raised block emby-button">
-                        <span>Stop</span>
-                    </button>
-                    <button id="MovieNightPauseResume" is="emby-button" type="button" class="raised block emby-button">
-                        <span>Pause</span>
-                    </button>
+                    <button id="MovieNightPrepare" is="emby-button" type="button" class="raised block emby-button"><span>Prepare (encode ahead of time)</span></button>
+                    <button id="MovieNightPrepareCancel" is="emby-button" type="button" class="raised block emby-button"><span>Cancel prepare</span></button>
                 </div>
+                <pre id="MovieNightPrepareStatus">(prepare status)</pre>
 
-                <h3>Status</h3>
-                <pre id="MovieNightStatus">(loading...)</pre>
+                <h2>2. Broadcast</h2>
+                <p>
+                    Go Live starts the channel; tune <strong id="MovieNightChannelLabel">"Movie Night"</strong> in Live TV on any device.
+                    Pause puts everyone on the slate within about 15 seconds; Resume restarts everyone from just before the pause.
+                    New viewers join at the live edge.
+                </p>
+                <div>
+                    <button id="MovieNightGoLive" is="emby-button" type="button" class="raised button-submit block emby-button"><span>Go Live</span></button>
+                    <button id="MovieNightPauseResume" is="emby-button" type="button" class="raised block emby-button"><span>Pause</span></button>
+                    <button id="MovieNightStop" is="emby-button" type="button" class="raised block emby-button"><span>Stop</span></button>
+                </div>
+                <h3>Now</h3>
+                <pre id="MovieNightSummary">(loading...)</pre>
+                <details>
+                    <summary>Full status (feed, encoder, who is fetching)</summary>
+                    <pre id="MovieNightStatus">(loading...)</pre>
+                </details>
+
+                <h2>3. Settings</h2>
+                <p>Rung count and bitrate are read at Go Live. Every rung is a live encode: one rung for a small box, more for a machine with a real GPU. Size the top bitrate to your upload speed divided by the number of viewers.</p>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MovieNightChannelName">Channel name</label>
+                    <input id="MovieNightChannelName" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MovieNightChannelNumber">Channel number</label>
+                    <input id="MovieNightChannelNumber" type="text" is="emby-input" />
+                </div>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="MovieNightRungs">Ladder rungs</label>
+                    <select id="MovieNightRungs" is="emby-select">
+                        <option value="1">1 - 720p only</option>
+                        <option value="2">2 - 720p + 480p</option>
+                        <option value="3">3 - 720p + 480p + 360p</option>
+                    </select>
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MovieNightTopBitrate">Top rung video bitrate (kbps)</label>
+                    <input id="MovieNightTopBitrate" type="number" is="emby-input" min="500" max="20000" step="100" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MovieNightPublicBaseUrl">Public base URL override (normally blank)</label>
+                    <input id="MovieNightPublicBaseUrl" type="text" is="emby-input" placeholder="https://jellyfin.example.com - leave blank to use whatever address each client connected with" />
+                </div>
+                <button id="MovieNightSaveSettings" is="emby-button" type="button" class="raised button-submit block emby-button"><span>Save settings</span></button>
 
                 <h2>Client sessions</h2>
-                <p>Live state read straight from Jellyfin's session manager - useful for checking whether a client is actually paused/playing without switching devices.</p>
-                <button id="MovieNightRefreshSessions" is="emby-button" type="button" class="raised block emby-button">
-                    <span>Refresh sessions</span>
-                </button>
+                <p>Live state read straight from Jellyfin's session manager - PlayMethod shows whether a client is direct-playing the ladder.</p>
+                <button id="MovieNightRefreshSessions" is="emby-button" type="button" class="raised block emby-button"><span>Refresh sessions</span></button>
                 <pre id="MovieNightSessions">(not loaded)</pre>
 
-                <h2>Spike test channels</h2>
-                <p>
-                    Off by default so the Live TV channel list only shows what you're actually
-                    testing. Toggling these takes effect within a few seconds (forces a guide
-                    refresh on save).
-                </p>
-
-                <div class="checkboxContainer">
-                    <label>
-                        <input id="MovieNightEnableRawTs" type="checkbox" is="emby-checkbox" />
-                        <span>Enable "Movie Night (raw TS spike)" channel</span>
-                    </label>
-                </div>
-                <div class="checkboxContainer">
-                    <label>
-                        <input id="MovieNightEnableSwitcher" type="checkbox" is="emby-checkbox" />
-                        <span>Enable "Movie Night (switcher spike)" channel</span>
-                    </label>
-                </div>
-                <button id="MovieNightSaveSpikeChannels" is="emby-button" type="button" class="raised button-submit block emby-button">
-                    <span>Save spike channel settings</span>
-                </button>
-
-                <h3>Switcher spike controls</h3>
-                <p>Tune the "Movie Night (switcher spike)" channel first, then pick an input to switch to live.</p>
-                <div>
-                    <button id="MovieNightSwitcherInput0" is="emby-button" type="button" class="raised block emby-button">
-                        <span>Switch to input 0 (blue)</span>
-                    </button>
-                    <button id="MovieNightSwitcherInput1" is="emby-button" type="button" class="raised block emby-button">
-                        <span>Switch to input 1 (maroon)</span>
-                    </button>
-                    <button id="MovieNightSwitcherInput2" is="emby-button" type="button" class="raised block emby-button">
-                        <span>Switch to input 2 (green)</span>
-                    </button>
-                </div>
-                <pre id="MovieNightSwitcherResult"></pre>
+                <details>
+                    <summary>Debug: spike test channels (leftovers, off by default)</summary>
+                    <div class="checkboxContainer">
+                        <label>
+                            <input id="MovieNightEnableRawTs" type="checkbox" is="emby-checkbox" />
+                            <span>Enable "Movie Night (raw TS spike)" channel</span>
+                        </label>
+                    </div>
+                    <div class="checkboxContainer">
+                        <label>
+                            <input id="MovieNightEnableSwitcher" type="checkbox" is="emby-checkbox" />
+                            <span>Enable "Movie Night (switcher spike)" channel</span>
+                        </label>
+                    </div>
+                    <p>Spike channel toggles are saved with the Settings button above.</p>
+                </details>
             </div>
         </div>
 
@@ -91,155 +106,230 @@
                 var pollTimer = null;
                 var lastStatus = null;
 
-                function apiUrl(path) {
-                    return ApiClient.getUrl('MovieNight/api/' + path);
-                }
+                function q(sel) { return document.querySelector(sel); }
+                function apiUrl(path) { return ApiClient.getUrl('MovieNight/api/' + path); }
+                function debugUrl(path) { return ApiClient.getUrl('MovieNight/api/debug/' + path); }
+                function post(path) { return ApiClient.ajax({ type: 'POST', url: apiUrl(path) }); }
 
-                function debugUrl(path) {
-                    return ApiClient.getUrl('MovieNight/api/debug/' + path);
+                function fmtSeconds(s) {
+                    s = Math.max(0, Math.floor(s || 0));
+                    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+                    return (h ? h + ':' : '') + (m < 10 && h ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
                 }
 
                 function renderStatus(status) {
                     lastStatus = status;
-                    document.querySelector('#MovieNightStatus').textContent = JSON.stringify(status, null, 2);
-                    var pauseResumeButton = document.querySelector('#MovieNightPauseResume span');
-                    pauseResumeButton.textContent = status.Paused ? 'Resume' : 'Pause';
+                    q('#MovieNightStatus').textContent = JSON.stringify(status, null, 2);
+                    var feed = status.Feed || {};
+                    var enc = status.Encoder || {};
+                    var lines = [];
+                    lines.push('State:      ' + status.State + (feed.Paused ? ' (PAUSED)' : ''));
+                    if (status.NowPlaying) { lines.push('Playing:    ' + status.NowPlaying + (status.UsingMezzanine ? '  [prepared mezzanine]' : '  [original file - no captions]')); }
+                    if (status.State === 'Live') {
+                        lines.push('Position:   ' + fmtSeconds(feed.PositionSeconds));
+                        lines.push('Encoder:    ' + (enc.Running ? 'running' : 'NOT RUNNING') + ', ' + (enc.Rungs || []).length + ' rung(s), ' + enc.Accel + (status.EncoderRestarts ? ', restarts: ' + status.EncoderRestarts : ''));
+                        var by = (enc.Fetches && enc.Fetches.ByRemote) || {};
+                        var remotes = Object.keys(by);
+                        lines.push('Fetchers:   ' + (remotes.length ? remotes.map(function (r) { return r + ' (' + by[r] + ')'; }).join(', ') : 'none yet'));
+                    }
+                    if (status.LastFailure) { lines.push('Last error: ' + status.LastFailure); }
+                    q('#MovieNightSummary').textContent = lines.join('\n');
+                    q('#MovieNightPauseResume span').textContent = feed.Paused ? 'Resume' : 'Pause';
+                    if (status.ChannelName) { q('#MovieNightChannelLabel').textContent = '"' + status.ChannelName + '"'; }
                 }
 
                 function poll() {
-                    // Roadmap step 1 (2026-08-16): the page drives the proven v3 switcher pipeline
-                    // (sw2/*), not the legacy HLS broadcast path.
-                    ApiClient.getJSON(debugUrl('sw2/status')).then(renderStatus).catch(function (err) {
-                        document.querySelector('#MovieNightStatus').textContent = 'status request failed: ' + err;
+                    ApiClient.getJSON(apiUrl('live/status')).then(renderStatus).catch(function (err) {
+                        q('#MovieNightSummary').textContent = 'status request failed: ' + err;
+                    });
+                }
+
+                function pollPrepare() {
+                    ApiClient.getJSON(apiUrl('prepare/status')).then(function (s) {
+                        var job = s.Job;
+                        var text;
+                        if (!job) {
+                            text = 'No prepare job yet.';
+                        } else {
+                            text = job.State + ': ' + (job.ItemName || job.ItemId);
+                            if (job.State === 'Running') { text += ' - ' + job.ProgressPercent + '% (' + fmtSeconds(job.OutTimeSeconds) + ', speed ' + (job.Speed || '?') + ')'; }
+                            if (job.SubtitleTitle) { text += '\ncaptions: ' + job.SubtitleTitle; }
+                            if (job.Error) { text += '\nerror: ' + job.Error; }
+                            if (job.State === 'Failed' && job.Stderr) { text += '\n\n' + job.Stderr; }
+                        }
+                        text += '\n\nPrepared: ' + ((s.Prepared || []).map(function (p) { return (p.Meta && p.Meta.ItemName) || p.ItemId; }).join(', ') || 'none');
+                        q('#MovieNightPrepareStatus').textContent = text;
+                    }).catch(function (err) {
+                        q('#MovieNightPrepareStatus').textContent = 'prepare status failed: ' + err;
                     });
                 }
 
                 function pollSessions() {
                     ApiClient.getJSON(debugUrl('sessions')).then(function (sessions) {
-                        document.querySelector('#MovieNightSessions').textContent = JSON.stringify(sessions, null, 2);
+                        q('#MovieNightSessions').textContent = JSON.stringify(sessions, null, 2);
                     }).catch(function (err) {
-                        document.querySelector('#MovieNightSessions').textContent = 'sessions request failed: ' + err;
+                        q('#MovieNightSessions').textContent = 'sessions request failed: ' + err;
                     });
                 }
 
                 function loadConfig() {
                     return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                        document.querySelector('#MovieNightEnableRawTs').checked = !!config.EnableRawTsSpikeChannel;
-                        document.querySelector('#MovieNightEnableSwitcher').checked = !!config.EnableSwitcherSpikeChannel;
+                        q('#MovieNightChannelName').value = config.ChannelName || 'Movie Night';
+                        q('#MovieNightChannelNumber').value = config.ChannelNumber || '900';
+                        q('#MovieNightRungs').value = String(config.LadderRungs || 1);
+                        q('#MovieNightTopBitrate').value = config.TopRungBitrateKbps || 4000;
+                        q('#MovieNightPublicBaseUrl').value = config.PublicBaseUrl || '';
+                        q('#MovieNightEnableRawTs').checked = !!config.EnableRawTsSpikeChannel;
+                        q('#MovieNightEnableSwitcher').checked = !!config.EnableSwitcherSpikeChannel;
                         return config;
                     });
                 }
 
-                document.querySelector('#MovieNightConfigPage').addEventListener('pageshow', function () {
+                function selectedItemId() {
+                    return q('#MovieNightMovie').value;
+                }
+
+                function searchMovies() {
+                    var term = q('#MovieNightSearch').value.trim();
+                    var url = apiUrl('library/movies' + (term ? '?search=' + encodeURIComponent(term) : ''));
+                    return ApiClient.getJSON(url).then(function (movies) {
+                        var select = q('#MovieNightMovie');
+                        select.innerHTML = '';
+                        movies.forEach(function (m) {
+                            var opt = document.createElement('option');
+                            opt.value = m.Id;
+                            opt.textContent = m.Name + (m.ProductionYear ? ' (' + m.ProductionYear + ')' : '') + (m.HasMezzanine ? '  ✓ prepared' : '');
+                            select.appendChild(opt);
+                        });
+                        if (!movies.length) {
+                            var none = document.createElement('option');
+                            none.value = '';
+                            none.textContent = '(no matches)';
+                            select.appendChild(none);
+                        }
+                        loadSubtitles();
+                    }).catch(function (err) {
+                        Dashboard.alert('Movie search failed: ' + err);
+                    });
+                }
+
+                function loadSubtitles() {
+                    var id = selectedItemId();
+                    var select = q('#MovieNightSubtitle');
+                    select.innerHTML = '<option value="">None</option>';
+                    if (!id) { return; }
+                    ApiClient.getJSON(apiUrl('library/' + id + '/subtitles')).then(function (subs) {
+                        subs.forEach(function (s) {
+                            var opt = document.createElement('option');
+                            opt.value = s.Index;
+                            opt.textContent = (s.Display || ((s.Language || '?') + ' ' + (s.Title || ''))) + ' [' + s.Codec + ', ' + s.Kind + ']';
+                            if (s.Kind === 'unsupported') { opt.disabled = true; }
+                            select.appendChild(opt);
+                        });
+                    }).catch(function () { /* leave "None" */ });
+                }
+
+                function withButtonDisabled(button, action) {
+                    if (button.disabled) { return; }
+                    button.disabled = true;
+                    action().finally(function () { button.disabled = false; });
+                }
+
+                q('#MovieNightConfigPage').addEventListener('pageshow', function () {
                     poll();
+                    pollPrepare();
                     pollSessions();
                     loadConfig();
+                    searchMovies();
                     pollTimer = setInterval(function () {
                         poll();
+                        pollPrepare();
                         pollSessions();
                     }, 3000);
                 });
 
-                document.querySelector('#MovieNightConfigPage').addEventListener('pagehide', function () {
-                    if (pollTimer) {
-                        clearInterval(pollTimer);
-                        pollTimer = null;
-                    }
+                q('#MovieNightConfigPage').addEventListener('pagehide', function () {
+                    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
                 });
 
-                // Disables a button for the duration of an in-flight request so a double-click (or
-                // an impatient re-click while Go Live's own up-to-30s wait is still pending) can't
-                // fire the same action twice. Found necessary live, 2026-08-14: a double Go Live
-                // click raced past a server-side check-then-act gap and spawned two ffmpeg
-                // processes writing into the same directory - fixed server-side too, but this is
-                // the cheap first line of defense against the thing that actually triggers it.
-                function withButtonDisabled(button, action) {
-                    if (button.disabled) {
-                        return;
-                    }
+                q('#MovieNightSearchButton').addEventListener('click', searchMovies);
+                q('#MovieNightSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); searchMovies(); } });
+                q('#MovieNightMovie').addEventListener('change', loadSubtitles);
 
-                    button.disabled = true;
-                    action().finally(function () {
-                        button.disabled = false;
-                    });
-                }
-
-                document.querySelector('#MovieNightGoLive').addEventListener('click', function () {
+                q('#MovieNightPrepare').addEventListener('click', function () {
                     var button = this;
-                    var itemId = document.querySelector('#MovieNightItemId').value.trim();
-                    if (!itemId) {
-                        Dashboard.alert('Enter an item ID first.');
-                        return;
-                    }
-
+                    var id = selectedItemId();
+                    if (!id) { Dashboard.alert('Pick a movie first.'); return; }
+                    var sub = q('#MovieNightSubtitle').value;
                     withButtonDisabled(button, function () {
-                        return ApiClient.ajax({
-                            type: 'POST',
-                            url: debugUrl('sw2/golive?itemId=' + encodeURIComponent(itemId)),
-                        }).then(poll).catch(function () {
-                            Dashboard.alert('Go Live failed - check status below and server logs.');
+                        return post('prepare?itemId=' + encodeURIComponent(id) + (sub ? '&subtitleStreamIndex=' + encodeURIComponent(sub) : ''))
+                            .then(pollPrepare)
+                            .catch(function (err) {
+                                Dashboard.alert('Prepare refused - ' + (err && err.responseText ? err.responseText : 'see status'));
+                                pollPrepare();
+                            });
+                    });
+                });
+
+                q('#MovieNightPrepareCancel').addEventListener('click', function () {
+                    post('prepare/cancel').then(pollPrepare);
+                });
+
+                q('#MovieNightGoLive').addEventListener('click', function () {
+                    var button = this;
+                    var id = selectedItemId();
+                    if (!id) { Dashboard.alert('Pick a movie first.'); return; }
+                    q('#MovieNightSummary').textContent = 'Going live - waiting for the first segment (up to 45s)...';
+                    withButtonDisabled(button, function () {
+                        return post('live/golive?itemId=' + encodeURIComponent(id)).then(poll).catch(function (err) {
+                            Dashboard.alert('Go Live failed - see the status panel.');
                             poll();
                         });
                     });
                 });
 
-                document.querySelector('#MovieNightStop').addEventListener('click', function () {
+                q('#MovieNightStop').addEventListener('click', function () {
                     var button = this;
+                    withButtonDisabled(button, function () { return post('live/stop').then(poll).catch(poll); });
+                });
+
+                q('#MovieNightPauseResume').addEventListener('click', function () {
+                    var button = this;
+                    var paused = lastStatus && lastStatus.Feed && lastStatus.Feed.Paused;
+                    var action = paused ? 'resume' : 'pause';
                     withButtonDisabled(button, function () {
-                        return ApiClient.ajax({
-                            type: 'POST',
-                            url: debugUrl('sw2/stop'),
-                        }).then(poll).catch(function () {
+                        return post('live/' + action).then(poll).catch(function () {
+                            Dashboard.alert(action + ' failed - check status and server logs.');
                             poll();
                         });
                     });
                 });
 
-                document.querySelector('#MovieNightPauseResume').addEventListener('click', function () {
-                    var button = this;
-                    var action = (lastStatus && lastStatus.Paused) ? 'resume' : 'pause';
-                    withButtonDisabled(button, function () {
-                        return ApiClient.ajax({
-                            type: 'POST',
-                            url: debugUrl('sw2/' + action),
-                        }).then(poll).catch(function () {
-                            Dashboard.alert(action + ' failed - check status below and server logs.');
-                            poll();
-                        });
-                    });
-                });
+                q('#MovieNightRefreshSessions').addEventListener('click', pollSessions);
 
-                document.querySelector('#MovieNightRefreshSessions').addEventListener('click', pollSessions);
-
-                document.querySelector('#MovieNightSaveSpikeChannels').addEventListener('click', function () {
-                    loadConfig().then(function (config) {
-                        config.EnableRawTsSpikeChannel = document.querySelector('#MovieNightEnableRawTs').checked;
-                        config.EnableSwitcherSpikeChannel = document.querySelector('#MovieNightEnableSwitcher').checked;
+                q('#MovieNightSaveSettings').addEventListener('click', function () {
+                    loadConfigRaw().then(function (config) {
+                        config.ChannelName = q('#MovieNightChannelName').value.trim() || 'Movie Night';
+                        config.ChannelNumber = q('#MovieNightChannelNumber').value.trim() || '900';
+                        config.LadderRungs = parseInt(q('#MovieNightRungs').value, 10) || 1;
+                        config.TopRungBitrateKbps = parseInt(q('#MovieNightTopBitrate').value, 10) || 4000;
+                        config.PublicBaseUrl = q('#MovieNightPublicBaseUrl').value.trim();
+                        config.EnableRawTsSpikeChannel = q('#MovieNightEnableRawTs').checked;
+                        config.EnableSwitcherSpikeChannel = q('#MovieNightEnableSwitcher').checked;
                         return ApiClient.updatePluginConfiguration(pluginId, config);
                     }).then(function () {
-                        return ApiClient.ajax({ type: 'POST', url: apiUrl('refresh-channels') });
+                        return post('refresh-channels');
                     }).then(function () {
                         Dashboard.processPluginConfigurationUpdateResult();
+                        poll();
                     }).catch(function () {
-                        Dashboard.alert('Failed to save spike channel settings.');
+                        Dashboard.alert('Failed to save settings.');
                     });
                 });
 
-                function switcherSelect(input) {
-                    ApiClient.ajax({
-                        type: 'POST',
-                        url: debugUrl('switcher-select?input=' + input),
-                        dataType: 'text',
-                    }).then(function (result) {
-                        document.querySelector('#MovieNightSwitcherResult').textContent = 'OK: ' + result;
-                    }).catch(function (err) {
-                        document.querySelector('#MovieNightSwitcherResult').textContent = 'Failed: ' + (err && err.responseText ? err.responseText : err);
-                    });
+                function loadConfigRaw() {
+                    return ApiClient.getPluginConfiguration(pluginId);
                 }
-
-                document.querySelector('#MovieNightSwitcherInput0').addEventListener('click', function () { switcherSelect(0); });
-                document.querySelector('#MovieNightSwitcherInput1').addEventListener('click', function () { switcherSelect(1); });
-                document.querySelector('#MovieNightSwitcherInput2').addEventListener('click', function () { switcherSelect(2); });
             })();
         </script>
     </div>

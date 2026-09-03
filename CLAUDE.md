@@ -25,8 +25,10 @@ Oct 2026, hosted on Jon's friend's gaming rig (she is the host); the NAS is now
 the dev/test box. Jon's rulings: single 720p rung OK, **rung count is a
 setting**, burn-in captions, ~15s pause latency OK, mpegts. Every rung is
 encoded (no copy rung), which drops the mezzanine GOP constraint and the fmp4
-gate. **Next session starts at `planning/ROADMAP-2026-09-03.md`** (step 1:
-encoder + authed route + real tuner host on the NAS). Full history:
+gate. **Step 1 is BUILT (v0.4.0.0 on branch `claude/next-steps-discussion-303uz0`)
+but has never run against a Jellyfin: next session starts at
+`planning/HANDOFF-2026-09-03.md`** (release, install on the NAS, acceptance test),
+plan in `planning/ROADMAP-2026-09-03.md`. Full history:
 `planning/ITERATION-LOG.md`; prior-art research:
 `planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
 
@@ -176,6 +178,12 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   "Refresh Guide" task calls internally, found via the same reflection-
   against-cached-NuGet-DLLs technique used for the Phase 1 tuner research
   (`MediaBrowser.Controller.LiveTv.IGuideManager`).
+
+- **Unit tests need `Jellyfin.Model` with runtime assets in the TEST project.** The
+  plugin excludes Jellyfin's runtime assets (the server supplies them), so a test
+  that constructs a `MediaStream` throws `FileNotFoundException: MediaBrowser.Model`
+  unless the test csproj references the package itself (added 2026-09-03). With a
+  non-9 SDK, run `DOTNET_ROLL_FORWARD=Major dotnet test`.
 
 ## Standing rules
 

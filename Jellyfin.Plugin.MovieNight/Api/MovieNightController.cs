@@ -45,7 +45,9 @@ public class MovieNightController : ControllerBase
 
     private readonly IServerApplicationHost _appHost;
     private readonly BroadcastManager _broadcastManager;
-    private readonly T0Gate _t0Gate;
+    private readonly LiveSession _liveSession;
+    private readonly LadderEncoder _ladderEncoder;
+    private readonly LiveSourceKnobs _knobs;
     private readonly ILogger<MovieNightController> _logger;
 
     /// <summary>
@@ -53,49 +55,44 @@ public class MovieNightController : ControllerBase
     /// </summary>
     /// <param name="appHost">Used to build loopback URLs against the server's own HTTP port.</param>
     /// <param name="broadcastManager">Source of truth for whether a broadcast is live and where its HLS output lives.</param>
-    /// <param name="t0Gate">T0 gate spike: owns the static ladder and records who fetches it.</param>
+    /// <param name="liveSession">The live broadcast - supplies the guide block for the live channel.</param>
+    /// <param name="ladderEncoder">Owns the ladder directory (for the debug-only anonymous route).</param>
+    /// <param name="knobs">Whether the anonymous ladder route is open.</param>
     /// <param name="logger">Logger (feed copy-loop instrumentation).</param>
-    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager, T0Gate t0Gate, ILogger<MovieNightController> logger)
+    public MovieNightController(IServerApplicationHost appHost, BroadcastManager broadcastManager, LiveSession liveSession, LadderEncoder ladderEncoder, LiveSourceKnobs knobs, ILogger<MovieNightController> logger)
     {
         _appHost = appHost;
         _broadcastManager = broadcastManager;
-        _t0Gate = t0Gate;
+        _liveSession = liveSession;
+        _ladderEncoder = ladderEncoder;
+        _knobs = knobs;
         _logger = logger;
     }
 
     /// <summary>
-    /// T0 GATE SPIKE (planning/DESIGN-abr-ladder.md §8): serves the pre-generated static ladder -
-    /// <c>master.m3u8</c>, the three per-rung <c>index.m3u8</c> files and their segments.
-    /// <para>
-    /// Deliberately a single catch-all action rather than one literal plus one parameterized
-    /// route: per CLAUDE.md, two routes on this controller that can match the same URL shape let
-    /// the parameterized one shadow the literal one. Every request is dispatched internally
-    /// instead, and <see cref="T0Gate.ResolveFile"/> is the only thing that decides what exists.
-    /// </para>
-    /// <para>
-    /// No loopback check here, unlike every other route on this controller - the whole point of the
-    /// gate is that the CLIENT fetches these directly. ponytail: anonymous for the spike; M3
-    /// replaces this with Jellyfin's own [Authorize] once the gate has passed, per the design's
-    /// §4(F) revision of SPEC §148.
-    /// </para>
+    /// DEBUG ONLY: the ladder with no auth, for A/B-ing whether the <c>api_key</c> on the real
+    /// route is what breaks a client. 404 unless <see cref="LiveSourceKnobs.UseAnonymousRoute"/>
+    /// is on (set via <c>POST /MovieNight/api/debug/live/source?anonymousRoute=true</c>), which
+    /// also makes the tuner host hand out this URL. Same exact-name whitelist as the real route.
     /// </summary>
-    /// <param name="path">Path below <c>stream/hls/</c>, e.g. <c>master.m3u8</c> or <c>v1/seg_7.ts</c>.</param>
-    /// <returns>The requested ladder file, or 404.</returns>
-    [HttpGet("stream/hls/{**path}")]
-    public IActionResult GetT0LadderFile([FromRoute] string path)
+    /// <param name="path">Path below <c>stream/hls-open/</c>.</param>
+    /// <returns>The file, or 404.</returns>
+    [HttpGet("stream/hls-open/{**path}")]
+    public IActionResult GetOpenLadderFile([FromRoute] string path)
     {
-        var fullPath = _t0Gate.ResolveFile(path);
-        _t0Gate.RecordHit(
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            Request.Headers.UserAgent.ToString(),
-            path,
-            fullPath is not null);
+        if (!_knobs.UseAnonymousRoute)
+        {
+            return NotFound();
+        }
 
+        var fullPath = _ladderEncoder.ResolveFile(path);
+        _ladderEncoder.RecordHit(HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers.UserAgent.ToString(), "open:" + path, fullPath is not null);
         if (fullPath is null)
         {
             return NotFound();
         }
 
+        Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
         return path.EndsWith(".m3u8", StringComparison.Ordinal)
             ? PhysicalFile(fullPath, "application/vnd.apple.mpegurl")
             : PhysicalFile(fullPath, "video/mp2t");
@@ -371,11 +368,15 @@ public class MovieNightController : ControllerBase
             return Forbid();
         }
 
+        // The live channel (custom tuner host, channel id "movienight") and the legacy M3U channel
+        // share this guide block; the live session wins while it is live.
         var status = _broadcastManager.GetStatus();
-        var channelName = status.ChannelName ?? DefaultChannelName;
-        var title = status.NowPlaying ?? channelName;
-        var start = status.StartedAtUtc ?? DateTime.UtcNow;
-        var duration = status.RunTimeTicks is long ticks ? TimeSpan.FromTicks(ticks) : TimeSpan.FromHours(4);
+        var live = _liveSession.IsLive;
+        var channelName = live ? _liveSession.ChannelName : status.ChannelName ?? DefaultChannelName;
+        var title = (live ? _liveSession.NowPlaying : status.NowPlaying) ?? channelName;
+        var start = (live ? _liveSession.StartedUtc : status.StartedAtUtc) ?? DateTime.UtcNow;
+        var runTime = live ? _liveSession.RunTimeTicks : status.RunTimeTicks;
+        var duration = runTime is long ticks ? TimeSpan.FromTicks(ticks) : TimeSpan.FromHours(4);
         var stop = start + duration;
         const string Format = "yyyyMMddHHmmss +0000";
 
