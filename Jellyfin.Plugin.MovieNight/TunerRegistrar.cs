@@ -22,7 +22,13 @@ public class TunerRegistrar : IHostedService
     private const string LiveTvConfigKey = "livetv";
     private const string RetiredT0TunerType = "movienight-t0";
     private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(60);
+    // 60s was not enough on the real target: the NAS took ~4 minutes from plugin load to
+    // CoreStartupHasCompleted on 2026-09-03, so registration was skipped and Live TV was left
+    // unwired (no movienight tuner entry, stale movienight-t0 entry not cleaned up) on a server
+    // that was otherwise healthy. Waiting costs nothing here - this runs on a background task
+    // after ApplicationStarted - so the timeout only exists to stop an unbounded loop if the
+    // server never finishes starting.
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromMinutes(10);
 
     private readonly ITunerHostManager _tunerHostManager;
     private readonly IListingsManager _listingsManager;

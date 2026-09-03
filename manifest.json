@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.4.2.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.2.0/jellyfin-plugin-movienight_0.4.2.0.zip",
+                "checksum": "f7402d3b440a83a14f1af71c80cb11cb",
+                "timestamp": "2026-09-03T21:30:42Z",
+                "changelog": "Raises the tuner-registration readiness timeout from 60s to 10 minutes. On a slow server (the NAS takes ~4 minutes to finish core startup) registration was skipped entirely, leaving Live TV unwired even though the plugin loaded fine."
+            },
+            {
                 "version": "0.4.1.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.1.0/jellyfin-plugin-movienight_0.4.1.0.zip",
