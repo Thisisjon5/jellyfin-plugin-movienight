@@ -31,6 +31,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public int TopRungBitrateKbps { get; set; } = 4000;
 
     /// <summary>
+    /// Gets or sets the HLS segment length in seconds (2-6, default 4). Shorter segments cut the
+    /// pause-to-screen latency (clients buffer a few segments) at the cost of more requests and
+    /// slightly less efficient encoding. Read at Go Live.
+    /// </summary>
+    public int SegmentSeconds { get; set; } = 4;
+
+    /// <summary>
     /// Gets or sets an explicit base URL (e.g. <c>https://jellyfin.example.com</c>) that clients
     /// use to fetch the ladder. Empty means derive it per request from the address the client
     /// itself used to reach Jellyfin (<c>GetSmartApiUrl</c>) - the right answer for almost every

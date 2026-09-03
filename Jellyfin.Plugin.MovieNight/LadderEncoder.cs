@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -173,8 +174,10 @@ public sealed class LadderEncoder : IDisposable
     }
 
     /// <summary>
-    /// Restarts the encoder with the arguments of the last <see cref="Start"/>, without cleaning
-    /// the directory. Used for crash recovery.
+    /// Restarts the encoder with the arguments of the last <see cref="Start"/>, into the same
+    /// directory, continuing the segment sequence after the highest segment on disk (a reset to
+    /// 0 makes every HLS client abandon the stream) and declaring a discontinuity. Used for crash
+    /// recovery. The stored args stay the ORIGINAL ones so repeated restarts recompute from disk.
     /// </summary>
     /// <returns>True if a process started.</returns>
     public bool Restart()
@@ -189,7 +192,46 @@ public sealed class LadderEncoder : IDisposable
             accel = _accel;
         }
 
-        return args is not null && rungs is not null && Start(args, rungs, accel, cleanDirectory: false);
+        if (args is null || rungs is null)
+        {
+            return false;
+        }
+
+        var next = HighestSegmentNumber() + 1;
+        _logger.LogInformation("Movie Night: ladder encoder restarting at segment {Next}", next);
+        var started = Start(LadderCommandBuilder.WithRestartContinuity(args, next), rungs, accel, cleanDirectory: false);
+        if (started)
+        {
+            lock (_lock)
+            {
+                _args = args;
+            }
+        }
+
+        return started;
+    }
+
+    /// <summary>Highest <c>seg_N.ts</c> number in the top rung's directory, or -1 if none.</summary>
+    /// <returns>The number.</returns>
+    public int HighestSegmentNumber()
+    {
+        var v0 = Path.Combine(LadderDirectory, "v0");
+        if (!Directory.Exists(v0))
+        {
+            return -1;
+        }
+
+        var highest = -1;
+        foreach (var file in Directory.EnumerateFiles(v0, "seg_*.ts"))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (int.TryParse(name.AsSpan(4), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > highest)
+            {
+                highest = n;
+            }
+        }
+
+        return highest;
     }
 
     /// <summary>

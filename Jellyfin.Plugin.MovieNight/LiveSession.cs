@@ -33,6 +33,7 @@ public sealed class LiveSession : IDisposable
     private readonly BroadcastManager _broadcastManager;
     private readonly LadderEncoder _encoder;
     private readonly MezzaninePrep _prep;
+    private readonly LiveSourceKnobs _knobs;
     private readonly ILibraryManager _libraryManager;
     private readonly IServerApplicationHost _appHost;
     private readonly IServerConfigurationManager _configurationManager;
@@ -56,6 +57,7 @@ public sealed class LiveSession : IDisposable
     /// <param name="broadcastManager">Owns the feeder/slate half (switcher v3).</param>
     /// <param name="encoder">Owns the ladder encoder process.</param>
     /// <param name="prep">Knows whether a mezzanine exists for an item.</param>
+    /// <param name="knobs">Runtime A/B knobs (hardware scale).</param>
     /// <param name="libraryManager">Resolves item ids.</param>
     /// <param name="appHost">The server's own HTTP port, for the loopback feed URL.</param>
     /// <param name="configurationManager">The server's hardware-acceleration setting.</param>
@@ -64,6 +66,7 @@ public sealed class LiveSession : IDisposable
         BroadcastManager broadcastManager,
         LadderEncoder encoder,
         MezzaninePrep prep,
+        LiveSourceKnobs knobs,
         ILibraryManager libraryManager,
         IServerApplicationHost appHost,
         IServerConfigurationManager configurationManager,
@@ -72,6 +75,7 @@ public sealed class LiveSession : IDisposable
         _broadcastManager = broadcastManager;
         _encoder = encoder;
         _prep = prep;
+        _knobs = knobs;
         _libraryManager = libraryManager;
         _appHost = appHost;
         _configurationManager = configurationManager;
@@ -189,7 +193,7 @@ public sealed class LiveSession : IDisposable
         var accel = HardwareAccelMapper.Map(encodingOptions.HardwareAccelerationType);
         var rungs = LadderCommandBuilder.PlanRungs(config.LadderRungs, config.TopRungBitrateKbps);
         var feedUrl = string.Create(CultureInfo.InvariantCulture, $"http://127.0.0.1:{_appHost.HttpPort}/MovieNight/stream/feed.ts");
-        var args = LadderCommandBuilder.Build(feedUrl, _encoder.LadderDirectory, rungs, accel, encodingOptions.VaapiDevice);
+        var args = LadderCommandBuilder.Build(feedUrl, _encoder.LadderDirectory, rungs, accel, encodingOptions.VaapiDevice, config.SegmentSeconds, _knobs.HardwareScale);
 
         // Feeder side first (it starts lazily when the encoder connects to feed.ts), then the
         // encoder itself.
@@ -332,7 +336,7 @@ public sealed class LiveSession : IDisposable
             return;
         }
 
-        _logger.LogWarning("Movie Night: ladder encoder exited ({Code}) while live - restart {Attempt}/{Max} in {Delay}s. Clients will see the playlist sequence reset.", exitCode, attempt, MaxRestarts, RestartDelay.TotalSeconds);
+        _logger.LogWarning("Movie Night: ladder encoder exited ({Code}) while live - restart {Attempt}/{Max} in {Delay}s, continuing the segment sequence.", exitCode, attempt, MaxRestarts, RestartDelay.TotalSeconds);
         _ = Task.Run(async () =>
         {
             await Task.Delay(RestartDelay).ConfigureAwait(false);

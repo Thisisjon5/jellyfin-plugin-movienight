@@ -66,6 +66,15 @@
                         <option value="3">3 - 720p + 480p + 360p</option>
                     </select>
                 </div>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="MovieNightSegmentSeconds">Segment length (pause-to-screen latency is roughly 3-4 segments)</label>
+                    <select id="MovieNightSegmentSeconds" is="emby-select">
+                        <option value="2">2 s - fastest pause, more requests</option>
+                        <option value="3">3 s</option>
+                        <option value="4">4 s - default</option>
+                        <option value="6">6 s</option>
+                    </select>
+                </div>
                 <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="MovieNightTopBitrate">Top rung video bitrate (kbps)</label>
                     <input id="MovieNightTopBitrate" type="number" is="emby-input" min="500" max="20000" step="100" />
@@ -177,6 +186,7 @@
                         q('#MovieNightChannelName').value = config.ChannelName || 'Movie Night';
                         q('#MovieNightChannelNumber').value = config.ChannelNumber || '900';
                         q('#MovieNightRungs').value = String(config.LadderRungs || 1);
+                        q('#MovieNightSegmentSeconds').value = String(config.SegmentSeconds || 4);
                         q('#MovieNightTopBitrate').value = config.TopRungBitrateKbps || 4000;
                         q('#MovieNightPublicBaseUrl').value = config.PublicBaseUrl || '';
                         q('#MovieNightEnableRawTs').checked = !!config.EnableRawTsSpikeChannel;
@@ -312,6 +322,7 @@
                         config.ChannelName = q('#MovieNightChannelName').value.trim() || 'Movie Night';
                         config.ChannelNumber = q('#MovieNightChannelNumber').value.trim() || '900';
                         config.LadderRungs = parseInt(q('#MovieNightRungs').value, 10) || 1;
+                        config.SegmentSeconds = parseInt(q('#MovieNightSegmentSeconds').value, 10) || 4;
                         config.TopRungBitrateKbps = parseInt(q('#MovieNightTopBitrate').value, 10) || 4000;
                         config.PublicBaseUrl = q('#MovieNightPublicBaseUrl').value.trim();
                         config.EnableRawTsSpikeChannel = q('#MovieNightEnableRawTs').checked;

@@ -714,3 +714,60 @@ the serving route exposes, so playlists could be read back), overwriting the
 synthetic test-pattern ladder with 90s of The Dressmaker. Rebuild with
 `POST /MovieNight/api/debug/t0/build-ladder` when the synthetic ladder is wanted
 again.
+
+## Arc 11 (2026-09-03) — v0.4.0.0 first live test: direct play works, PAUSE KILLS IT
+
+**v0.4.0.0** (roadmap-09-03 step 1, built blind in a remote container, see
+`HANDOFF-2026-09-03.md`) installed on the NAS by Jon and tested with real hardware.
+
+**Result (Jon):** Go Live → Xbox and Roku both played the new channel, roughly
+10 s apart from each other (expected: independent client buffers). **Pause →
+both kept playing for at least a minute, then were kicked off.** Jon: "not
+anywhere close to acceptable."
+
+**Diagnosis (from code, not yet from logs — the local session should confirm
+against `live/status` → `Encoder.LastExitCode` / `EncoderRestarts` / `Stderr`
+and the server log around the pause):**
+
+- At Pause the feed swaps from the film's stream to the slate's. In 0.4.0 the
+  feeder is a COPY (no longer a QSV encode to 720p), so the encoder now sees
+  the raw film (e.g. 1920×800 / 23.976 / maybe 10-bit) followed by the slate
+  (1280×720 / 30 / 8-bit). That is a resolution + aspect + pix_fmt + fps change
+  at the seam.
+- ffmpeg rebuilds the filter graph on that (default `-reinit_filter 1`). But
+  (a) an already-open encoder cannot accept new frame dimensions — the 0.4.0
+  chain was `scale=-2:720` / `scale_qsv=-1:720`, whose OUTPUT size changes
+  with the source aspect; and (b) on QSV the rebuilt `hwupload` hands
+  `h264_qsv` a brand-new hardware frames context. Either kills the encoder.
+- LiveSession restarted the dead encoder into the same directory. The new
+  process numbered segments from 0 again → the playlist's media sequence went
+  BACKWARDS → Roku and Xbox played out what they had buffered and abandoned
+  the stream. "About a minute" ≈ buffer + stall/retry before giving up. After
+  5 restarts LiveSession stops the session and withdraws the channel.
+- v3 never hit this because its FEEDER encoded everything to 720p first, so
+  the persistent process only ever saw one geometry.
+
+**Fix — v0.4.1.0:**
+
+1. **Fixed output geometry per rung.** Every chain is
+   `scale=W:H:force_original_aspect_ratio=decrease,pad=W:H:-1:-1,setsar=1`
+   then a fixed pixel format, in SYSTEM memory; hardware encoders take
+   system-memory frames directly (h264_qsv uploads itself). A 2.39:1 film is
+   letterboxed into 1280×720; the slate fills it. Nothing the encoder sees can
+   change at a seam. The old `hwupload`+`scale_qsv` chain survives only as a
+   debug knob (`hardwareScale=true`) for A/B.
+2. **Sequence-continuous restarts.** A crash restart now passes
+   `-start_number <highest seg on disk + 1>` and `+discont_start`, so numbering
+   and media sequence continue and a discontinuity is declared.
+3. **Segment length is a setting** (2–6 s, default 4). Pause-to-screen latency
+   is ~3–4 segments; 2 s halves it if the encoder keeps up.
+
+**Not fixed, by design:** the ~10–20 s from clicking Pause to the slate on
+screen is client buffer depth (Jon's ruling: ~15 s OK). If the fix works, the
+slate should appear on both clients within that window and nobody gets kicked.
+
+**Open until re-tested:** whether h264_qsv on this NAS accepts system-memory
+nv12 input at ≥1× realtime (it is the standard `-c:v h264_qsv` usage, but this
+NAS has surprised before — `hardwareScale=true` restores the T2 chain if not,
+at the cost of the seam bug returning); whether the seam is clean through the
+software path (film → slate → film, three geometry changes per pause cycle).

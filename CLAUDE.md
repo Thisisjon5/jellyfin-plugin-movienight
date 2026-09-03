@@ -25,9 +25,11 @@ Oct 2026, hosted on Jon's friend's gaming rig (she is the host); the NAS is now
 the dev/test box. Jon's rulings: single 720p rung OK, **rung count is a
 setting**, burn-in captions, ~15s pause latency OK, mpegts. Every rung is
 encoded (no copy rung), which drops the mezzanine GOP constraint and the fmp4
-gate. **Step 1 is BUILT (v0.4.0.0 on branch `claude/next-steps-discussion-303uz0`)
-but has never run against a Jellyfin: next session starts at
-`planning/HANDOFF-2026-09-03.md`** (release, install on the NAS, acceptance test),
+gate. **Step 1 is BUILT. v0.4.0.0 live-tested 2026-09-03: Roku + Xbox direct-play,
+but Pause killed the encoder at the film→slate seam (ITERATION-LOG arc 11);
+v0.4.1.0 (fixed-geometry chains, sequence-continuous restarts) is on branch
+`claude/next-steps-discussion-303uz0` awaiting re-test. Next session starts at
+`planning/HANDOFF-2026-09-03.md`** (release, install, acceptance test from Pause),
 plan in `planning/ROADMAP-2026-09-03.md`. Full history:
 `planning/ITERATION-LOG.md`; prior-art research:
 `planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
@@ -65,6 +67,20 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   though everything else is fine. Verify with
   `[System.Reflection.AssemblyName]::GetAssemblyName(dllPath).Version` before
   packaging a release, don't just trust `build.yaml`.
+- **The live encoder must never see a frame-parameter change.** The feed swaps
+  film ↔ slate at every pause/resume, with different resolution, aspect, pixel
+  format and frame rate. ffmpeg rebuilds the filter graph on that, but an open
+  encoder cannot take new frame dimensions, and a rebuilt `hwupload` hands
+  `h264_qsv` a new hardware frames context - the encoder died at the first pause
+  of v0.4.0.0 (arc 11). Every rung's chain scales-to-fit AND pads to a fixed
+  size in system memory, ends in a fixed pixel format, and hardware encoders
+  take system-memory frames. Never put `hwupload`/`scale_qsv` back in the live
+  chain; never let the output geometry depend on the source.
+- **A crash-restart of an HLS encoder must continue the segment sequence.**
+  A playlist whose media sequence goes backwards makes Roku and Xbox play out
+  their buffer and abandon the stream. `LadderEncoder.Restart` passes
+  `-start_number <highest on disk + 1>` and `+discont_start`.
+
 - **Any code that calls back into Jellyfin's own HTTP API from a hosted service
   must wait for `IHostApplicationLifetime.ApplicationStarted`.** `IHostedService.
   StartAsync` runs during host startup, before Kestrel is listening — a loopback

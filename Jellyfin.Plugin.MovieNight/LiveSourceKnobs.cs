@@ -38,6 +38,13 @@ public sealed class LiveSourceKnobs
     public bool UseAnonymousRoute { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the QSV encoder should use the T2-era hardware
+    /// scale chain (<c>hwupload</c> + <c>scale_qsv</c>) instead of software scale/pad. Off by
+    /// default since 0.4.1: that chain died at the first slate seam. Read at Go Live. A/B only.
+    /// </summary>
+    public bool HardwareScale { get; set; }
+
+    /// <summary>
     /// Gets or sets an absolute base URL that overrides both the setting and the per-request
     /// derivation, e.g. <c>http://192.168.68.118:8096</c>. Null means normal derivation.
     /// </summary>

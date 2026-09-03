@@ -58,6 +58,7 @@ public class MovieNightDebugController : ControllerBase
     /// <param name="supportsTranscoding">SupportsTranscoding (default true; T0 passed with false).</param>
     /// <param name="anonymousRoute">True to hand out the token-less <c>stream/hls-open/</c> URL and open that route. Debug only.</param>
     /// <param name="baseUrl">Absolute base URL override, e.g. http://192.168.68.118:8096. Pass "null" to clear.</param>
+    /// <param name="hardwareScale">QSV only: true to use the legacy hwupload+scale_qsv chain at the NEXT Go Live (the one that died at the first seam). A/B only.</param>
     /// <returns>The knobs now in effect.</returns>
     [HttpPost("live/source")]
     public ActionResult LiveSource(
@@ -66,8 +67,14 @@ public class MovieNightDebugController : ControllerBase
         [FromQuery] bool? directStream,
         [FromQuery] bool? supportsTranscoding,
         [FromQuery] bool? anonymousRoute,
-        [FromQuery] string? baseUrl)
+        [FromQuery] string? baseUrl,
+        [FromQuery] bool? hardwareScale)
     {
+        if (hardwareScale.HasValue)
+        {
+            _knobs.HardwareScale = hardwareScale.Value;
+        }
+
         if (container is not null)
         {
             _knobs.Container = string.Equals(container, "null", StringComparison.OrdinalIgnoreCase) ? null : container;

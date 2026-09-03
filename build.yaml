@@ -1,7 +1,7 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.4.0.0"
+version: "0.4.1.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
@@ -14,6 +14,21 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.4.1.0: Fixes the first live test's pause failure (2026-09-03, Roku + Xbox: both direct-
+  played, ~10 s apart; on Pause both kept playing about a minute, then were kicked off). At
+  a pause the feed switches from the film's stream to the slate's - different resolution,
+  aspect, pixel format and frame rate. ffmpeg rebuilds the filter graph on that, but an open
+  encoder cannot take new frame dimensions, and on QSV the rebuilt hwupload hands h264_qsv a
+  new hardware frames context, which kills the encoder; the crash-restart then wrote a
+  playlist whose media sequence reset to 0, which every HLS client abandons after playing
+  out its buffer. Two fixes: (1) every rung's chain now scales-to-fit and PADS to an exact
+  fixed size in system memory (letterboxing a 2.39:1 film, filling with the 16:9 slate),
+  ends in a fixed pixel format, and hardware encoders take system-memory frames directly -
+  nothing the encoder sees can change at a seam; the old hwupload+scale_qsv chain survives
+  only as a debug knob (hardwareScale) for A/B. (2) a crash restart continues the segment
+  numbering and media sequence from the highest segment on disk and declares a
+  discontinuity, instead of resetting. Also: segment length becomes a setting (2-6 s,
+  default 4) because pause-to-screen latency is a few segments deep.
   0.4.0.0: The live pipeline for the Halloween movie nights (planning/ROADMAP-2026-09-03.md
   step 1: M2 + M3 + M4 of the ABR-ladder design, collapsed). The v3 feeders (movie feeder,
   slate, feed.ts, position clock, pause/resume) now feed ONE ladder encoder - one ffmpeg
