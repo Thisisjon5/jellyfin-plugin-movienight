@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.4.0.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.0.0/jellyfin-plugin-movienight_0.4.0.0.zip",
+                "checksum": "fc4b8df725522b854a07eb52c428b67f",
+                "timestamp": "2026-09-03T20:01:11Z",
+                "changelog": "Roadmap step 1: real ITunerHost serving a ladder clients fetch directly, ladder encoder with the rung count as a setting, mezzanine prep with burn-in captions, authed segment route, rebuilt config page (movie picker, subtitle picker, Prepare job). Retires the T0 gate spike."
+            },
+            {
                 "version": "0.3.34.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.3.34.0/jellyfin-plugin-movienight_0.3.34.0.zip",
@@ -349,7 +357,7 @@
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.1.0.0/jellyfin-plugin-movienight_0.1.0.0.zip",
                 "checksum": "9e196262179413c86e30e268b3d9e48e",
                 "timestamp": "2026-08-13T16:10:51Z",
-                "changelog": "Phase 0 scaffold. Not functional yet â€” empty config page only."
+                "changelog": "Phase 0 scaffold. Not functional yet \u00e2\u20ac\u201d empty config page only."
             }
         ]
     }

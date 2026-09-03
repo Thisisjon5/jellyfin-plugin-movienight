@@ -41,7 +41,9 @@ public class LadderCommandBuilderTests
         Assert.Contains("-hls_list_size 6", joined);
         Assert.Contains("delete_segments+independent_segments+program_date_time", joined);
         Assert.Contains("-hls_segment_type mpegts", joined);
-        Assert.Equal(Out + "/v%v/index.m3u8", args[^1]);
+        // Path.Combine uses the platform separator, so compare the same way rather than hardcoding
+        // "/" - this assertion failed on Windows only; the builder itself is correct there.
+        Assert.Equal(System.IO.Path.Combine(Out, "v%v", "index.m3u8"), args[^1]);
     }
 
     [Fact]
