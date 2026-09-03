@@ -686,3 +686,54 @@ the live ladder.
 
 **Blocks nothing.** Step 1 acceptance testing proceeds as-is; a cap changes
 numbers, not architecture.
+
+## 2026-09-03 (evening) — Pause kills the encoder: the seam is the geometry change
+
+**Context.** First live pause on real clients (Xbox + Roku, channel 900,
+v0.4.4.0): both direct-played the ladder, then on Pause kept playing ~1 min,
+never saw the slate, and were thrown off. Two earlier bugs (the v3 zero-viewer
+kill firing on the encoder's own disconnect; a slate double-spawn leaking an
+ffmpeg past Stop) were fixed in 0.4.4.0 and held. The encoder still died,
+1.5 s after the swap, with:
+
+```
+Reconfiguring filter graph because video parameters changed to yuv420p, 1280x720
+Impossible to convert between the formats supported by the filter
+  'Parsed_scale_qsv_2' and the filter 'auto_scale_1'
+Error reinitializing filters!   ->   Conversion failed!   (exit 218)
+```
+
+The movie feed is the mezzanine (1080x720, SAR 853:720, 29.97 fps); the slate
+is synthesised at 1280x720 square @30. ffmpeg tries to rebuild the filter
+graph for the new geometry and the QSV hardware filters cannot be rebuilt
+mid-stream. Deterministic. This is HANDOFF-2026-09-03 risk #4 exactly: v3's
+pause was proven with encode-feeders -> copy-remux (copy doesn't care about a
+geometry change); 0.4.0.0 moved to copy-feeder -> encode, putting the seam
+inside a hardware decode/scale chain.
+
+**Verified offline before any fix shipped**, via `debug/encode-probe` with the
+exact production ladder graph over `concat:` of an 8 s mezzanine clip and an
+8 s slate:
+- CONTROL (current 1280x720@30 slate): exit 218, identical error. Reproduced.
+- CANDIDATE (slate at 1080x720 @30000/1001, matched SAR): exit 0, encoded
+  straight through the seam; post-seam segments valid at constant 1080x720.
+libx264 rounded the SAR to 77:65 and it did not matter - width, height,
+frame rate and pixel format are what trigger the reconfigure.
+
+**Options put to Jon:**
+- A. Make the slate match the movie's geometry exactly (probe at Go Live).
+- B. Pin the encoder to a fixed software-scaled canvas before hwupload.
+- C. Never splice the feed: pre-rendered slate segments stitched into the
+  served playlist with EXT-X-DISCONTINUITY.
+
+- **RULING (Jon): A.** Slates are synthesised to match the source. Direction
+  for later: "populate a variety of slates" - a per-title slate could be
+  produced during Prepare as needed (follow-up, not this change).
+- **Jon on C:** tried before and it did not work ("static was a problem"),
+  though testable. Record note (implementer): the 0.3.7-0.3.15 arc failed
+  because the EXT-X-DISCONTINUITY tag did not survive *Jellyfin's remux*
+  (ITERATION-LOG arc 2 verdict). Under the ladder, clients read our playlist
+  directly, so that specific failure would not recur. Parked, not re-argued.
+- Process ruling that came with it (Jon, verbatim intent): slow down - verify
+  in the lab before shipping, not restart-and-hope. The encode-probe endpoint
+  is the lab.

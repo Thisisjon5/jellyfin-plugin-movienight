@@ -199,7 +199,11 @@ public sealed class LiveSession : IDisposable
         // session's lifetime - otherwise the pause swap drops the count to zero and the feeders
         // are killed out from under the encoder. Set before the feed can be consumed.
         _broadcastManager.LadderSessionActive = true;
-        _broadcastManager.ConfigureSwitcherV2(source, _appHost.HttpPort);
+
+        // The slate must be synthesised to the movie feed's exact geometry, or the pause swap
+        // kills a hardware-accelerated encoder (SourceGeometry explains; verified 2026-09-03).
+        var geometry = await _broadcastManager.ProbeGeometryAsync(source, cancellationToken).ConfigureAwait(false);
+        _broadcastManager.ConfigureSwitcherV2(source, _appHost.HttpPort, geometry);
 
         if (!_encoder.Start(args, rungs, accel, cleanDirectory: true))
         {

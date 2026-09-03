@@ -72,6 +72,7 @@ public sealed class BroadcastManager : IDisposable
     private Process? _sw2FeederProcess;
     private StderrTailBuffer? _sw2FeederStderr;
     private Process? _sw2SlateProcess;
+    private SourceGeometry? _sw2SlateGeometry;
     private int _sw2ConsumerCount;
 
     private Process? _process;
@@ -1311,7 +1312,8 @@ public sealed class BroadcastManager : IDisposable
     /// </summary>
     /// <param name="itemPath">Filesystem path of the movie.</param>
     /// <param name="httpPort">The server's own HTTP port, for the loopback feed URL.</param>
-    public void ConfigureSwitcherV2(string itemPath, int httpPort)
+    /// <param name="slateGeometry">Video geometry of the movie feed; the slate is synthesised to match it. Null falls back to the historical 1280x720@30 slate, which WILL kill a hardware-accelerated ladder encoder on pause (see <see cref="SourceGeometry"/>).</param>
+    public void ConfigureSwitcherV2(string itemPath, int httpPort, SourceGeometry? slateGeometry = null)
     {
         Process? oldFeeder;
         Process? oldSlate;
@@ -1324,10 +1326,20 @@ public sealed class BroadcastManager : IDisposable
             _sw2MoviePath = itemPath;
             _sw2HttpPort = httpPort;
             _sw2Paused = false;
+            _sw2SlateGeometry = slateGeometry;
         }
 
         KillSw2Feeder(oldFeeder);
         KillSw2Feeder(oldSlate);
+
+        if (slateGeometry is null)
+        {
+            _logger.LogWarning("Movie Night: switcher v2 configured WITHOUT source geometry - the slate will use defaults and a pause is likely to kill a hardware-accelerated ladder encoder (see SourceGeometry)");
+        }
+        else
+        {
+            _logger.LogInformation("Movie Night: switcher v2 slate will match source geometry {Geometry}", slateGeometry);
+        }
 
         // The feeder does NOT start here - it starts lazily when the feed actually gains a
         // consumer (see EnsureSw2FeederStarted, called from the controller's feed.ts loop).
@@ -1727,6 +1739,93 @@ public sealed class BroadcastManager : IDisposable
     /// placeholder for the real pause asset (Jon's ruling: quiet or gentle music; asset is
     /// swappable without architecture change).
     /// </summary>
+    /// <summary>
+    /// Builds the slate feeder's ffmpeg args. The slate MUST match the movie feed's width, height,
+    /// frame rate and pixel format or the pause swap kills a hardware-accelerated ladder encoder
+    /// (see <see cref="SourceGeometry"/>). Pure so the exact args can be tested and, if ever in
+    /// doubt, replayed through debug/encode-probe.
+    /// </summary>
+    /// <param name="geometry">The movie feed's geometry, or null to fall back to the historical 1280x720@30 slate.</param>
+    /// <returns>Argument list for ffmpeg.</returns>
+    public static IReadOnlyList<string> BuildSw2SlateArgs(SourceGeometry? geometry)
+    {
+        var size = geometry?.LavfiSize ?? "1280x720";
+        var rate = geometry?.FrameRate ?? "30";
+        var pixFmt = geometry?.PixelFormat ?? "yuv420p";
+
+        var args = new List<string>
+        {
+            "-re", "-f", "lavfi", "-i", FormattableString.Invariant($"color=c=darkslategray:s={size}:r={rate}"),
+            "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=48000",
+            "-filter:a", "volume=0.15",
+        };
+
+        if (geometry?.SetSarArgument is { } sar)
+        {
+            args.Add("-vf");
+            args.Add("setsar=" + sar);
+        }
+
+        args.AddRange(new[]
+        {
+            "-pix_fmt", pixFmt,
+            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
+            "-b:v", "1000k", "-maxrate", "1000k", "-bufsize", "2000k", "-g", "60",
+            "-c:a", "aac", "-b:a", "96k", "-ac", "2", "-ar", "48000",
+            "-f", "mpegts", "pipe:1",
+        });
+        return args;
+    }
+
+    /// <summary>
+    /// Probes the video geometry of a file with the server's own ffprobe. Returns null (and logs)
+    /// on any failure so Go Live is never blocked by it - the caller decides what to do without it.
+    /// </summary>
+    /// <param name="path">The file the movie feeder will emit (mezzanine or original).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The geometry, or null.</returns>
+    public async Task<SourceGeometry?> ProbeGeometryAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _mediaEncoder.ProbePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var arg in new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", SourceGeometry.FfprobeEntries, "-of", "csv=p=0", path })
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return null;
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+            var firstLine = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (process.ExitCode != 0 || !SourceGeometry.TryParseFfprobeCsv(firstLine, out var geometry))
+            {
+                _logger.LogWarning("Movie Night: could not probe source geometry of {Path} (exit {Code}, output {Output})", path, process.ExitCode, firstLine);
+                return null;
+            }
+
+            return geometry;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Movie Night: source geometry probe failed for {Path}", path);
+            return null;
+        }
+    }
+
     private void StartSw2SlateFeeder()
     {
         var startInfo = new ProcessStartInfo
@@ -1737,17 +1836,13 @@ public sealed class BroadcastManager : IDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var arg in new[]
+        SourceGeometry? geometry;
+        lock (_lock)
         {
-            "-re", "-f", "lavfi", "-i", "color=c=darkslategray:s=1280x720:r=30",
-            "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=48000",
-            "-filter:a", "volume=0.15",
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
-            "-b:v", "1000k", "-maxrate", "1000k", "-bufsize", "2000k", "-g", "60",
-            "-c:a", "aac", "-b:a", "96k", "-ac", "2",
-            "-f", "mpegts", "pipe:1",
-        })
+            geometry = _sw2SlateGeometry;
+        }
+
+        foreach (var arg in BuildSw2SlateArgs(geometry))
         {
             startInfo.ArgumentList.Add(arg);
         }

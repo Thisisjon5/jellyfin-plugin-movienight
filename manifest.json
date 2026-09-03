@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.4.5.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.5.0/jellyfin-plugin-movienight_0.4.5.0.zip",
+                "checksum": "bff628427a0441387f6d2a8fde447f48",
+                "timestamp": "2026-09-03T23:40:45Z",
+                "changelog": "Pause no longer kills a hardware-accelerated encoder: the slate is now synthesised to match the movie feed's exact width, height, frame rate and pixel format (probed at Go Live), so the feed swap never changes the video geometry and ffmpeg never has to rebuild a QSV filter graph mid-stream. Reproduced and verified offline with the encode-probe endpoint before shipping."
+            },
+            {
                 "version": "0.4.4.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.4.0/jellyfin-plugin-movienight_0.4.4.0.zip",
