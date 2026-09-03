@@ -235,18 +235,28 @@
                     action().finally(function () { button.disabled = false; });
                 }
 
-                q('#MovieNightConfigPage').addEventListener('pageshow', function () {
+                // Init must not depend solely on 'pageshow'. Loading this page by a hard reload
+                // straight at its URL can fire that event before this inline script has attached
+                // the listener, in which case nothing ever initialises and every field stays on
+                // its placeholder forever (seen 2026-09-03). So run init directly as well, and
+                // make it idempotent so a later 'pageshow' cannot stack a second interval.
+                function init() {
                     poll();
                     pollPrepare();
                     pollSessions();
                     loadConfig();
                     searchMovies();
-                    pollTimer = setInterval(function () {
-                        poll();
-                        pollPrepare();
-                        pollSessions();
-                    }, 3000);
-                });
+                    if (!pollTimer) {
+                        pollTimer = setInterval(function () {
+                            poll();
+                            pollPrepare();
+                            pollSessions();
+                        }, 3000);
+                    }
+                }
+
+                q('#MovieNightConfigPage').addEventListener('pageshow', init);
+                init();
 
                 q('#MovieNightConfigPage').addEventListener('pagehide', function () {
                     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
