@@ -14,6 +14,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.MediaEncoding;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.MovieNight;
@@ -43,7 +44,7 @@ public sealed class BroadcastManager : IDisposable
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IServerConfigurationManager _configurationManager;
-    private readonly IGuideManager _guideManager;
+    private readonly IServiceProvider _services;
     private readonly ILogger<BroadcastManager> _logger;
 
     // SPIKE 5 (2026-08-14, see planning/DECISIONS.md "mechanism replaced: filler-channel splice"):
@@ -107,22 +108,27 @@ public sealed class BroadcastManager : IDisposable
     /// and (via <see cref="IServerConfigurationManager.ApplicationPaths"/>) a writable directory for
     /// HLS output - deriving it this way avoids depending on <see cref="IApplicationPaths"/> being
     /// separately DI-registered.</param>
-    /// <param name="guideManager">Used to force an immediate guide refresh on every state change -
-    /// the built-in "Refresh Guide" scheduled task only runs once every 24h by default (confirmed
-    /// via a live test where a client showed "no schedule information" the entire broadcast), so
-    /// without this a real movie-length broadcast would still finish before the guide caught up.</param>
+    /// <param name="services">Used to resolve <see cref="IGuideManager"/> LAZILY, at the moment a
+    /// guide refresh is actually fired. It MUST NOT be a constructor dependency: Jellyfin builds
+    /// every <see cref="ITunerHost"/> while constructing ILiveTvManager, so a tuner host that
+    /// transitively needs IGuideManager closes a DI cycle
+    /// (ILiveTvManager -> ILiveTvService -> ITunerHostManager -> ITunerHost -> LiveSession ->
+    /// BroadcastManager -> IGuideManager -> ILiveTvManager) and the whole SERVER fails to start
+    /// with "A circular dependency was detected". That is exactly what v0.4.0.0 did on 2026-09-03.
+    /// The refresh itself is still needed: the built-in "Refresh Guide" task only runs once every
+    /// 24h by default, so without it a movie-length broadcast finishes before the guide catches up.</param>
     /// <param name="logger">Logger.</param>
     public BroadcastManager(
         ILibraryManager libraryManager,
         IMediaEncoder mediaEncoder,
         IServerConfigurationManager configurationManager,
-        IGuideManager guideManager,
+        IServiceProvider services,
         ILogger<BroadcastManager> logger)
     {
         _libraryManager = libraryManager;
         _mediaEncoder = mediaEncoder;
         _configurationManager = configurationManager;
-        _guideManager = guideManager;
+        _services = services;
         _logger = logger;
         HlsDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "hls");
         MovieDirectory = Path.Combine(configurationManager.ApplicationPaths.TempDirectory, "MovieNight", "movie");
@@ -2175,7 +2181,12 @@ public sealed class BroadcastManager : IDisposable
         {
             try
             {
-                await _guideManager.RefreshGuide(new Progress<double>(), CancellationToken.None).ConfigureAwait(false);
+                // Resolved here, not injected - see the constructor's "services" remark. A scope is
+                // used so this is correct whether Jellyfin registers IGuideManager as a singleton
+                // or scoped.
+                using var scope = _services.CreateScope();
+                var guideManager = scope.ServiceProvider.GetRequiredService<IGuideManager>();
+                await guideManager.RefreshGuide(new Progress<double>(), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

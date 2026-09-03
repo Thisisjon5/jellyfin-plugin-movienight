@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.4.1.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.1.0/jellyfin-plugin-movienight_0.4.1.0.zip",
+                "checksum": "8883199077bac61eeb24ec6203bf851e",
+                "timestamp": "2026-09-03T21:17:11Z",
+                "changelog": "Fixes a DI circular dependency in 0.4.0.0 that prevented Jellyfin from starting at all. BroadcastManager now resolves IGuideManager lazily instead of taking it as a constructor parameter; a new test walks the tuner host constructor graph so the cycle cannot return."
+            },
+            {
                 "version": "0.4.0.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.0.0/jellyfin-plugin-movienight_0.4.0.0.zip",

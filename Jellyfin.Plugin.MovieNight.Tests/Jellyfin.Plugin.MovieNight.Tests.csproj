@@ -13,6 +13,9 @@
     <!-- The plugin excludes Jellyfin's runtime assets (the server supplies them); tests that build
          MediaStream rows need the assembly loadable, so reference it here with runtime assets. -->
     <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
+    <!-- Same reason, for DependencyGraphTests: reflecting over constructor parameters resolves
+         their types, so MediaBrowser.Controller must be loadable in the test host. -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.6" />
   </ItemGroup>
 
   <ItemGroup>
