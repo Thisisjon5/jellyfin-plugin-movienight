@@ -1632,19 +1632,22 @@ public sealed class BroadcastManager : IDisposable
             CreateNoWindow = true,
         };
 
-        // QSV-only for the spike (this NAS's real config); mirrors the proven Go Live video chain
-        // including the v0.3.22 keyframe fix. Mezzanine bitrate a bit above the final encode so
-        // the switcher's re-encode isn't stacking two lossy passes at the same rate.
+        // Since 0.4.0 (ROADMAP-2026-09-03.md §3) the feeder is a paced COPY, not an encode: the
+        // one live encode is the ladder encoder downstream, which decodes whatever arrives here.
+        // Video is copied so nothing here depends on the box's hardware (the previous QSV-only
+        // chain was the NAS's, and the production box is not the NAS). Audio is normalised to
+        // AAC stereo 48 kHz so the slate/movie seams never change the encoder's audio format,
+        // and so codecs MPEG-TS cannot carry (FLAC, PCM) never reach it. A prepared mezzanine
+        // (MezzaninePrep) is already 720p h264/AAC, which makes both cheap.
         var args = new List<string>();
         if (startSeconds > 0)
         {
             args.AddRange(["-ss", startSeconds.ToString("F3", CultureInfo.InvariantCulture)]);
         }
 
-        args.AddRange(["-re", "-i", moviePath]);
-        args.AddRange(["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw", "-c:v", "h264_qsv", "-preset", "veryfast", "-vf", "format=nv12,hwupload=extra_hw_frames=64,scale_qsv=-1:720"]);
-        args.AddRange(["-profile:v", "high", "-level", "4.0", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k", "-g", "100", "-forced_idr", "1"]);
-        args.AddRange(["-c:a", "aac", "-b:a", "128k", "-ac", "2"]);
+        args.AddRange(["-re", "-i", moviePath, "-map", "0:v:0", "-map", "0:a:0"]);
+        args.AddRange(["-c:v", "copy"]);
+        args.AddRange(["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000"]);
         args.AddRange(["-f", "mpegts", "pipe:1"]);
         foreach (var arg in args)
         {
@@ -1701,7 +1704,7 @@ public sealed class BroadcastManager : IDisposable
         foreach (var arg in new[]
         {
             "-re", "-f", "lavfi", "-i", "color=c=darkslategray:s=1280x720:r=30",
-            "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=44100",
+            "-re", "-f", "lavfi", "-i", "sine=frequency=196:sample_rate=48000",
             "-filter:a", "volume=0.15",
             "-pix_fmt", "yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-level", "4.0",
@@ -2266,56 +2269,4 @@ public sealed class BroadcastManager : IDisposable
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
     private static extern int NativeKill(int pid, int signal);
-
-    /// <summary>
-    /// Keeps the FIRST lines of ffmpeg stderr (input probe, stream mapping, filter init, first
-    /// segment opens - where startup failures actually explain themselves) plus a rolling tail of
-    /// the most recent lines, for surfacing in failure messages (spec §5.4/§7's "Last failure
-    /// panel"). Head capture added 2026-08-14 while diagnosing the 25fps Go Live stall: a
-    /// tail-only buffer showed 40 healthy progress lines and nothing else, which made three
-    /// separate live failures undiagnosable from their own error messages.
-    /// </summary>
-    private sealed class StderrTailBuffer
-    {
-        private const int MaxHeadLines = 60;
-        private const int MaxTailLines = 40;
-        private readonly object _bufferLock = new();
-        private readonly List<string> _head = new();
-        private readonly Queue<string> _tail = new();
-        private int _totalLines;
-
-        public void Add(string line)
-        {
-            lock (_bufferLock)
-            {
-                _totalLines++;
-                if (_head.Count < MaxHeadLines)
-                {
-                    _head.Add(line);
-                    return;
-                }
-
-                _tail.Enqueue(line);
-                while (_tail.Count > MaxTailLines)
-                {
-                    _tail.Dequeue();
-                }
-            }
-        }
-
-        public override string ToString()
-        {
-            lock (_bufferLock)
-            {
-                if (_tail.Count == 0)
-                {
-                    return string.Join('\n', _head);
-                }
-
-                var omitted = _totalLines - _head.Count - _tail.Count;
-                var middle = omitted > 0 ? $"\n... [{omitted} lines omitted] ...\n" : "\n";
-                return string.Join('\n', _head) + middle + string.Join('\n', _tail);
-            }
-        }
-    }
 }

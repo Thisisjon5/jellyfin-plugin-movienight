@@ -16,10 +16,18 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddHostedService<TunerRegistrar>();
         serviceCollection.AddSingleton<BroadcastManager>();
 
-        // T0 GATE SPIKE (planning/DESIGN-abr-ladder.md §8). Registering ITunerHost into Jellyfin's
-        // DI is what makes a plugin-supplied tuner host join the enumerable Live TV resolves.
-        // Remove both lines with the spike.
-        serviceCollection.AddSingleton<T0Gate>();
-        serviceCollection.AddSingleton<ITunerHost, T0GateTunerHost>();
+        // The live pipeline (ROADMAP-2026-09-03.md step 1): ladder encoder, mezzanine prep, the
+        // session that ties them to the v3 feeders, and the tuner host that hands clients the
+        // ladder URL. Registering ITunerHost into DI is what makes a plugin-supplied tuner host
+        // join the set Live TV enumerates (proven by the T0 gate).
+        serviceCollection.AddSingleton<LadderEncoder>();
+        serviceCollection.AddSingleton<MezzaninePrep>();
+        serviceCollection.AddSingleton<LiveSession>();
+        serviceCollection.AddSingleton<LiveSourceKnobs>();
+        serviceCollection.AddSingleton<ITunerHost, MovieNightTunerHost>();
+
+        // The tuner host derives each client's ladder URL from the request asking for media
+        // sources. Jellyfin registers this itself; AddHttpContextAccessor is idempotent.
+        serviceCollection.AddHttpContextAccessor();
     }
 }

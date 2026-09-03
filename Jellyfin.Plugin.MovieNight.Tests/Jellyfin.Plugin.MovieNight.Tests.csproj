@@ -10,6 +10,9 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- The plugin excludes Jellyfin's runtime assets (the server supplies them); tests that build
+         MediaStream rows need the assembly loadable, so reference it here with runtime assets. -->
+    <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
   </ItemGroup>
 
   <ItemGroup>

@@ -20,6 +20,7 @@ public class TunerRegistrar : IHostedService
 {
     private const string ChannelName = "Movie Night";
     private const string LiveTvConfigKey = "livetv";
+    private const string RetiredT0TunerType = "movienight-t0";
     private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(60);
 
@@ -129,36 +130,45 @@ public class TunerRegistrar : IHostedService
             _logger.LogError(ex, "Movie Night: failed to register tuner/listings provider");
         }
 
-        await RegisterT0GateTunerAsync().ConfigureAwait(false);
+        await RegisterMovieNightTunerAsync().ConfigureAwait(false);
     }
 
     /// <summary>
-    /// T0 GATE SPIKE (planning/DESIGN-abr-ladder.md §8). Persists a tuner-host entry of the gate
-    /// host's own type. The host is already in DI, but Live TV keys channels to a configured
-    /// tuner entry - without one, its channel can be dropped before it ever reaches the guide.
-    /// Failure here must not take the real M3U tuner down with it, hence its own try/catch.
-    /// Remove with the spike.
+    /// Persists a tuner-host entry of the Movie Night tuner host's own type. The host is already in
+    /// DI, but Live TV keys channels to a configured tuner entry - without one, its channel can be
+    /// dropped before it ever reaches the guide (learned on the T0 gate). Also removes the retired
+    /// T0 spike's entry, whose type no longer has a host behind it. Failure here must not take the
+    /// M3U tuner down with it, hence its own try/catch.
     /// </summary>
-    private async Task RegisterT0GateTunerAsync()
+    private async Task RegisterMovieNightTunerAsync()
     {
         try
         {
             var liveTvOptions = (LiveTvOptions)_configurationManager.GetConfiguration(LiveTvConfigKey);
+
+            var stale = liveTvOptions.TunerHosts.Where(t => string.Equals(t.Type, RetiredT0TunerType, StringComparison.Ordinal)).ToArray();
+            if (stale.Length > 0)
+            {
+                liveTvOptions.TunerHosts = liveTvOptions.TunerHosts.Except(stale).ToArray();
+                _configurationManager.SaveConfiguration(LiveTvConfigKey, liveTvOptions);
+                _logger.LogInformation("Movie Night: removed {Count} retired T0 gate tuner entry(ies)", stale.Length);
+            }
+
             var existing = liveTvOptions.TunerHosts
-                .FirstOrDefault(t => string.Equals(t.Type, T0GateTunerHost.TunerType, StringComparison.Ordinal));
+                .FirstOrDefault(t => string.Equals(t.Type, MovieNightTunerHost.TunerType, StringComparison.Ordinal));
 
             var info = existing ?? new TunerHostInfo();
-            info.Type = T0GateTunerHost.TunerType;
-            info.Url = T0GateTunerHost.TunerType;
-            info.FriendlyName = "Movie Night T0 gate";
+            info.Type = MovieNightTunerHost.TunerType;
+            info.Url = MovieNightTunerHost.TunerType;
+            info.FriendlyName = "Movie Night";
             info.TunerCount = 0;
 
             await _tunerHostManager.SaveTunerHost(info).ConfigureAwait(false);
-            _logger.LogInformation("Movie Night T0: registered gate tuner host");
+            _logger.LogInformation("Movie Night: registered live tuner host");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Movie Night T0: failed to register gate tuner host");
+            _logger.LogError(ex, "Movie Night: failed to register live tuner host");
         }
     }
 }

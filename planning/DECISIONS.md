@@ -598,3 +598,45 @@ web/repo-fetch access, not available in this conversation.
   mezzanine is rung 0 and must be built in the chosen format. fmp4 costs nothing
   on the encoder and may fix Firefox; but no client has played an fmp4 ladder,
   and Roku/Xbox/Chrome all passed on mpegts. Test before ruling.
+
+## 2026-09-03 — Halloween movie nights: deadline, new host machine, V1 scope
+
+**Context:** two weeks idle after the 2026-08-19 T0/T2 session. Jon set a
+target: Halloween movie nights, late September into October 2026, hosted on
+**his friend's computer** (a gaming rig), which she controls. Requirements in
+her terms: pause reaches everyone quickly, resume restarts everyone from the
+same spot, new viewers land on the live edge, a variety of clients. Plan:
+`ROADMAP-2026-09-03.md`.
+
+- **RULING (Jon): a single 720p rung is acceptable for V1.** Adaptive bitrate
+  is no longer a V1 gate.
+- **RULING (Jon): the rung count is a plugin setting.** Jon's NAS (the dev /
+  test box) runs one rung; the friend's rig can run several, tested there
+  with the encode-probe endpoint before anyone relies on it.
+- **Design consequence (implementer, follows from the ruling): every rung is
+  encoded — no `-c copy` rung.** N=1 is then the degenerate case of the same
+  code path, GOP alignment across rungs is intrinsic to the single process,
+  and the mezzanine's fixed-GOP constraint (design §4(A), T2's reason for
+  M1) is dropped. This also decouples the mezzanine from the segment format,
+  so the fmp4-vs-mpegts test that blocked M1 is no longer blocking.
+- **RULING (Jon): burn-in captions for V1**, chosen per movie at prep time.
+  Burn-in has to happen in the mezzanine prep, not the live encoder: feed
+  time diverges from movie time as soon as a pause inserts slate. WebVTT
+  renditions remain the long-term path (2026-08-19 ruling stands as V2).
+- **RULING (Jon): ~15 s pause latency is acceptable.** This is the HLS client
+  buffer depth at 4 s segments and cannot be engineered away server-side
+  (clients cannot be commanded, 2026-08-16).
+- **Segment format stays mpegts** for V1 — the format Roku, Xbox and Chrome
+  direct-played. Firefox on a single server hop is acceptable at N=1.
+- **Encoder backend follows Jellyfin's hardware-acceleration setting** with
+  libx264 as the universal fallback. The v3 feeder's "QSV-only" hardcode
+  goes away; nvenc exists in `FfmpegCommandBuilder` but has never run and is
+  the likely backend on her rig.
+- **Host surface: still the admin config page** (2026-08-14 ruling stands),
+  now with a movie picker, subtitle-track dropdown and a Prepare job so the
+  host never pastes an item ID.
+- **NOT yet ruled / unknown:** her machine's OS, CPU, GPU and Jellyfin
+  version; her upload bandwidth (egress is O(N) and is the binding constraint
+  on a home line); how viewers reach her server (a public URL is required —
+  Rokus cannot run tailscale); viewer count and devices; who tests clients at
+  her end. These block roadmap step 2, not step 1.
