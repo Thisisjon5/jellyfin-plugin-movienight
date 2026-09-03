@@ -11,7 +11,7 @@ https://github.com/Thisisjon5/jellyfin-plugin-movienight; manifest.json at
 repo root on master is the install source; target = the NAS's real Jellyfin
 ([[jellyfin]], 10.11.6, port 8096).
 
-**Current arc (2026-08-18/19): shared ABR ladder.** The 2026-08-18 soak FAILED
+**Previous arc (2026-08-18/19): shared ABR ladder.** The 2026-08-18 soak FAILED
 — Jellyfin's Live TV path spawns one ffmpeg per client ALWAYS, even for a pure
 copy, so server cost was O(N) and the sliding window was destroyed. Replaced by
 a ladder served through our own `ITunerHost` so clients pull segments directly:
@@ -19,7 +19,14 @@ a ladder served through our own `ITunerHost` so clients pull segments directly:
 (2026-08-19, v0.3.34.0)** — Roku/Xbox/Chrome DirectPlay with zero server
 ffmpeg; ladder encodes at 1.7–2.6x realtime with exact 4.004s GOP alignment.
 Universal pause (switcher v3) is unchanged and sits upstream of all this.
-**Next session starts at `planning/HANDOFF-2026-08-19.md`.** Full history:
+
+**Current arc (2026-09-03): Halloween V1.** Deadline: movie nights late Sept /
+Oct 2026, hosted on Jon's friend's gaming rig (she is the host); the NAS is now
+the dev/test box. Jon's rulings: single 720p rung OK, **rung count is a
+setting**, burn-in captions, ~15s pause latency OK, mpegts. Every rung is
+encoded (no copy rung), which drops the mezzanine GOP constraint and the fmp4
+gate. **Next session starts at `planning/ROADMAP-2026-09-03.md`** (step 1:
+encoder + authed route + real tuner host on the NAS). Full history:
 `planning/ITERATION-LOG.md`; prior-art research:
 `planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
 
