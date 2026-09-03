@@ -8,6 +8,14 @@
         "category": "Live TV",
         "versions": [
             {
+                "version": "0.4.4.0",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.4.0/jellyfin-plugin-movienight_0.4.4.0.zip",
+                "checksum": "677f214e17b9a36fee32cc30acf1b248",
+                "timestamp": "2026-09-03T23:16:57Z",
+                "changelog": "Fixes pause killing the broadcast. The v3 zero-viewer kill assumed one feed.ts consumer per tune; under the ladder the encoder is the only consumer, so the pause swap dropped the count to zero and the feeders were killed out from under the encoder, which exited and restarted, resetting HLS sequence numbers and throwing every client off. Also fixes a race that spawned two slate feeders on pause and leaked one past Stop."
+            },
+            {
                 "version": "0.4.3.0",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/Thisisjon5/jellyfin-plugin-movienight/releases/download/v0.4.3.0/jellyfin-plugin-movienight_0.4.3.0.zip",

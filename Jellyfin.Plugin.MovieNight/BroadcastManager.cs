@@ -137,6 +137,20 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
+    /// Gets or sets a value indicating whether a ladder session owns the feed.
+    /// <para>
+    /// Set by <see cref="LiveSession"/> for the life of a broadcast. When true the feed has exactly
+    /// ONE consumer - the ladder encoder - for the whole broadcast, and viewers never touch
+    /// feed.ts at all (they fetch ladder segments). The zero-viewer kill below therefore measures
+    /// nothing about viewers and must not fire: on 2026-09-03 the pause swap ended the encoder's
+    /// feed.ts read, the count hit zero, the feeders were killed out from under the encoder, and
+    /// it exited 218 and restarted - resetting HLS sequence numbers and throwing every client off
+    /// mid-broadcast.
+    /// </para>
+    /// </summary>
+    public bool LadderSessionActive { get; set; }
+
+    /// <summary>
     /// Gets the directory the served master.m3u8 lives in - the only thing BroadcastManager ever
     /// writes here is that hand-authored playlist (see <see cref="WriteServedPlaylist"/>); no
     /// encoder writes segments into this directory. Kept separate from every source's own output
@@ -1400,6 +1414,17 @@ public sealed class BroadcastManager : IDisposable
     }
 
     /// <summary>
+    /// Whether losing the last feed.ts consumer should tear the feeders down. Pure so the rule can
+    /// be tested without a live server - it was wrong in exactly one case and cost a broadcast.
+    /// </summary>
+    /// <param name="consumerCount">Consumers remaining AFTER the disconnect.</param>
+    /// <param name="ladderSessionActive">Whether a ladder session owns the feed.</param>
+    /// <param name="hasMovie">Whether a movie is configured at all.</param>
+    /// <returns>True only when the feeders should be killed.</returns>
+    public static bool ShouldStopFeedersOnDisconnect(int consumerCount, bool ladderSessionActive, bool hasMovie)
+        => hasMovie && !ladderSessionActive && consumerCount <= 0;
+
+    /// <summary>
     /// SWITCHER V2: a feed.ts consumer disconnected. When the LAST one goes, kill the feeders -
     /// an unconsumed ffmpeg blocks on its full stdout pipe while its -re clock keeps running,
     /// then bursts ~3x realtime on the next consumer to catch up, landing that viewer the whole
@@ -1415,7 +1440,7 @@ public sealed class BroadcastManager : IDisposable
         lock (_lock)
         {
             _sw2ConsumerCount = Math.Max(0, _sw2ConsumerCount - 1);
-            if (_sw2ConsumerCount > 0 || _sw2MoviePath is null)
+            if (!ShouldStopFeedersOnDisconnect(_sw2ConsumerCount, LadderSessionActive, _sw2MoviePath is not null))
             {
                 return;
             }
@@ -1452,6 +1477,11 @@ public sealed class BroadcastManager : IDisposable
     /// </summary>
     public void ClearSwitcherV2()
     {
+        // Every teardown path (Stop, Go Live failure, natural end) routes through here, so the
+        // ladder flag is cleared here rather than at each call site - one of them would eventually
+        // be missed, and a stale "true" disarms the zero-viewer kill for the next non-ladder use.
+        LadderSessionActive = false;
+
         Process? oldFeeder;
         Process? oldSlate;
         lock (_lock)
@@ -1732,9 +1762,28 @@ public sealed class BroadcastManager : IDisposable
             process.Start();
             process.BeginErrorReadLine();
 
+            // The spawn happens outside the lock, so two callers can both decide to start a slate.
+            // Whoever loses the race kills its own process rather than overwriting the winner's
+            // field and orphaning it - on 2026-09-03 that leaked an ffmpeg (pid 1904) that
+            // outlived Stop.
+            Process? lostRace = null;
             lock (_lock)
             {
-                _sw2SlateProcess = process;
+                if (_sw2SlateProcess is not null && !_sw2SlateProcess.HasExited)
+                {
+                    lostRace = process;
+                }
+                else
+                {
+                    _sw2SlateProcess = process;
+                }
+            }
+
+            if (lostRace is not null)
+            {
+                _logger.LogInformation("Movie Night: switcher v2 slate feeder pid {Pid} lost the start race, killing it", lostRace.Id);
+                KillSw2Feeder(lostRace);
+                return;
             }
 
             _logger.LogInformation("Movie Night: switcher v2 slate feeder pid {Pid} started", process.Id);

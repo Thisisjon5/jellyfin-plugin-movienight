@@ -193,6 +193,12 @@ public sealed class LiveSession : IDisposable
 
         // Feeder side first (it starts lazily when the encoder connects to feed.ts), then the
         // encoder itself.
+        //
+        // The ladder encoder is the ONLY feed.ts consumer for the whole broadcast, so the v3
+        // zero-viewer kill (which assumed one consumer per tune) must be disarmed for the
+        // session's lifetime - otherwise the pause swap drops the count to zero and the feeders
+        // are killed out from under the encoder. Set before the feed can be consumed.
+        _broadcastManager.LadderSessionActive = true;
         _broadcastManager.ConfigureSwitcherV2(source, _appHost.HttpPort);
 
         if (!_encoder.Start(args, rungs, accel, cleanDirectory: true))
