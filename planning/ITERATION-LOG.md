@@ -714,3 +714,71 @@ the serving route exposes, so playlists could be read back), overwriting the
 synthetic test-pattern ladder with 90s of The Dressmaker. Rebuild with
 `POST /MovieNight/api/debug/t0/build-ladder` when the synthetic ladder is wanted
 again.
+
+## Arc 11 — 2026-09-03: step 1 goes live on the NAS (v0.4.0.0 → v0.4.5.0)
+
+First time the ladder pipeline ran against a real Jellyfin. Six releases in
+one day; every bug below was invisible to unit tests and only showed on the
+server or on real clients. Rulings: DECISIONS.md (same date). Lab tool that
+turned the day around: `POST /MovieNight/api/debug/encode-probe`.
+
+- **0.4.0.0 — took Jellyfin DOWN.** DI cycle: ITunerHost(MovieNightTunerHost)
+  → LiveSession → BroadcastManager → IGuideManager → ILiveTvManager →
+  ITunerHost. Jellyfin builds every ITunerHost while constructing
+  ILiveTvManager, so the server aborted at startup ("A circular dependency
+  was detected"). Recovered by moving the plugin folder out over SSH (the
+  install had replaced 0.3.34.0, so no fallback version was on disk).
+- **0.4.1.0 — fix:** BroadcastManager resolves IGuideManager lazily inside the
+  fire-and-forget guide refresh. `DependencyGraphTests` walks the tuner host's
+  constructor graph and fails on the cycle (verified both directions).
+  Loaded clean; Live TV left unwired.
+- **0.4.2.0 — fix:** TunerRegistrar's readiness timeout 60 s → 10 min; the NAS
+  takes ~4 min from plugin load to CoreStartupHasCompleted, so registration
+  was skipped. All four registration lines then appeared.
+- **Prepare, first real run:** Afro Samurai (720x480 MPEG-2 DVD, anamorphic
+  SAR 853:720) → 1080x720 h264 mezzanine, 4.94 GB, 24.5 min = 5.88x overall
+  (9.5x during encode; `+faststart` then rewrites the whole file - pure waste
+  for a locally-read mezzanine, logged). Output SAR/DAR preserved: 1080x720
+  displays as 16:9, correct. Jon raised capping at source resolution (open
+  question in DECISIONS.md).
+- **0.4.3.0 — config page** blank after a hard reload: all init hung off one
+  `pageshow` listener that can fire before the inline script attaches it.
+  Init now runs directly too; reproduced/verified with the Chrome extension.
+- **First live tune: Xbox + Roku both DirectPlayed the ladder** (fetches from
+  their own IPs, one server encoder, UsingMezzanine true). ~10 s offset =
+  buffer depth. **Pause threw both off.** Log: two slate feeders spawned in
+  the same millisecond; "last feed consumer gone, feeders stopped"; encoder
+  exit 218; restart; sequence reset.
+- **0.4.4.0 — two fixes:** (1) the v3 zero-viewer kill assumed one feed.ts
+  consumer per tune; under the ladder the encoder is the ONLY consumer, so the
+  pause swap dropped the count to zero and the feeders were killed under it.
+  Disarmed for the life of a ladder session (`LadderSessionActive`, cleared in
+  ClearSwitcherV2). Rule is a pure static with tests, verified to fail without
+  the guard. (2) Slate spawn happened outside the lock; the loser now kills its
+  own process (pid 1904 had leaked past Stop). **Pause still threw clients
+  off** - encoder exit 218 again, 1.5 s after the swap.
+- **Root cause, finally:** `Reconfiguring filter graph because video
+  parameters changed to 1280x720 / Impossible to convert ... Parsed_scale_qsv_2`.
+  The slate (1280x720 sq @30) had different geometry from the mezzanine
+  (1080x720 SAR 853:720 @29.97); QSV filters cannot be rebuilt mid-stream.
+  HANDOFF-2026-09-03 risk #4 exactly - v3's seam was proven through a copy
+  remux, 0.4.0.0 moved it into a hardware decode/scale chain.
+- **Verified in the lab BEFORE fixing** (Jon: "slow down"): encode-probe over
+  `concat:` of an 8 s mezzanine clip and an 8 s slate through the exact ladder
+  graph. Old slate: exit 218, identical error. Matched slate: exit 0, straight
+  through, constant 1080x720 after the seam. Options A/B/C put to Jon; **ruled A**.
+- **0.4.5.0 — fix:** `SourceGeometry` probed at Go Live; slate synthesised to
+  the same size/rate/pix_fmt/SAR (`BuildSw2SlateArgs`, pure, tested). The lab
+  also caught that ffprobe prints CSV in its own canonical order - the first
+  parser would have read the SAR as the frame rate and unit tests agreed with
+  it; fixtures are now verbatim NAS output.
+- **Verification (Jon away; Chrome extension disconnected):** ffmpeg 8 on the
+  laptop as a real HLS client (fetching from 192.168.68.102 with api_key) for
+  200 s while pause (at 179.0 s) and resume (from 169.0 s) were driven over the
+  API. **EncoderRestarts stayed 0 throughout; the client never disconnected;
+  zero errors/discontinuities in its log; capture is one continuous 200.16 s
+  stream.** Frames pulled from the capture: movie at 20 s, the slate at 90 s,
+  movie again at 170 s. Still open: Roku/Xbox *staying attached* across the
+  splice is only proven for an ffmpeg client; the mid-GOP cut gives a frame or
+  two of decoder concealment at the seam; the slate double-call still happens
+  underneath the guard.
