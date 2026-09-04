@@ -23,14 +23,18 @@ Universal pause (switcher v3) is unchanged and sits upstream of all this.
 **Current arc (2026-09-03): Halloween V1.** Deadline: movie nights late Sept /
 Oct 2026, hosted on Jon's friend's gaming rig (she is the host); the NAS is now
 the dev/test box. Jon's rulings: single 720p rung OK, **rung count is a
-setting**, burn-in captions, ~15s pause latency OK, mpegts. Every rung is
-encoded (no copy rung), which drops the mezzanine GOP constraint and the fmp4
-gate. **Step 1 is BUILT (v0.4.0.0 on branch `claude/next-steps-discussion-303uz0`)
-but has never run against a Jellyfin: next session starts at
-`planning/HANDOFF-2026-09-03.md`** (release, install on the NAS, acceptance test),
-plan in `planning/ROADMAP-2026-09-03.md`. Full history:
-`planning/ITERATION-LOG.md`; prior-art research:
-`planning/RESEARCH-livestreaming-prior-art.md`; rulings: `planning/DECISIONS.md`.
+setting**, burn-in captions, ~15s pause latency OK, mpegts, **slates match the
+source's geometry (option A)**. **Step 1 is LIVE on the NAS: v0.4.5.0** - six
+releases on 2026-09-03, every bug server-only (DI cycle that took Jellyfin
+down; registration timeout; pageshow race; v3 zero-viewer kill; the pause
+seam). Xbox + Roku DirectPlay the live ladder; pause/resume proven with an
+ffmpeg HLS client (`EncoderRestarts` 0, no disconnect) but **not yet on
+Roku/Xbox**. **Next session starts at `planning/HANDOFF-2026-09-03-evening.md`.**
+Plan: `planning/ROADMAP-2026-09-03.md`. Full history: `planning/ITERATION-LOG.md`;
+prior-art research: `planning/RESEARCH-livestreaming-prior-art.md`; rulings:
+`planning/DECISIONS.md`. **Lab before ship (Jon, 2026-09-03):** reproduce and
+verify through `POST /MovieNight/api/debug/encode-probe` before a release that
+touches the encoder - never restart-and-hope.
 
 ## Build
 
@@ -184,6 +188,49 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   that constructs a `MediaStream` throws `FileNotFoundException: MediaBrowser.Model`
   unless the test csproj references the package itself (added 2026-09-03). With a
   non-9 SDK, run `DOTNET_ROLL_FORWARD=Major dotnet test`.
+
+- **Nothing reachable from an `ITunerHost` constructor may inject `IGuideManager`
+  or `ILiveTvManager`.** Jellyfin builds every ITunerHost WHILE constructing
+  ILiveTvManager, so the graph closes into a DI cycle and the whole SERVER fails
+  to start ("A circular dependency was detected") - v0.4.0.0 did exactly this.
+  Resolve Live TV services lazily at call time (BroadcastManager does, via
+  IServiceProvider). `DependencyGraphTests` walks the constructor graph and
+  fails on the cycle; keep it.
+- **A plugin install REPLACES the previous version's folder** - there is no
+  older DLL on disk to fall back to. If a version stops Jellyfin starting, the
+  recovery is `docker exec jellyfin mv "/config/data/plugins/Movie Night_X"
+  "/config/MovieNight_X.broken" && docker restart jellyfin` (Jon runs it; the
+  harness blocks mutating SSH). The startup error page shows the real log from
+  the LAN: `http://192.168.68.118:8096/startup/logger`.
+- **The NAS takes ~4 min from plugin load to `CoreStartupHasCompleted`.**
+  TunerRegistrar's readiness wait is 10 min for that reason; a 60 s wait
+  silently skipped registration and left Live TV unwired on an otherwise
+  healthy server (0.4.1.0). Also: `POST /Packages/Installed` can time out
+  (`000`) and still have succeeded - check the plugins dir, not the response.
+- **The pause seam is a geometry change, and QSV cannot survive one.** The
+  ladder encoder reads one continuous feed; pause swaps it movie->slate. If
+  width, height, frame rate or pixel format differ, ffmpeg rebuilds its filter
+  graph and `hwupload`/`scale_qsv` cannot be rebuilt mid-stream ("Impossible to
+  convert ... Parsed_scale_qsv_2", exit 218). `SourceGeometry` is probed at Go
+  Live and `BuildSw2SlateArgs` synthesises the slate to match - never hardcode
+  the slate's size or rate again. SAR rounding does not trigger it.
+- **Under a ladder session the encoder is the ONLY `feed.ts` consumer.** The v3
+  zero-viewer kill (last consumer gone -> kill feeders) measured viewers when each
+  tune consumed feed.ts; now it would kill the feed under the encoder on any
+  swap. `BroadcastManager.LadderSessionActive` disarms it; `ClearSwitcherV2`
+  clears it so no teardown path can forget.
+- **ffprobe's CSV output is in ITS canonical field order, not the
+  `-show_entries` order** (width, height, sample_aspect_ratio, pix_fmt,
+  r_frame_rate). A parser that assumed the requested order passed unit tests
+  and would have read the SAR as the frame rate. Pin fixtures to real output.
+- **Config-page init must not depend solely on `pageshow`** - a hard reload at
+  the page URL can fire it before the inline script attaches the listener,
+  leaving every field on its placeholder. Call init directly too, idempotently.
+- **`encode-probe` is the lab.** `{out}` = its scratch dir, WIPED every run; put
+  multi-step inputs in the container's `/tmp`. `concat:/tmp/a.ts|/tmp/b.ts`
+  mirrors feed.ts exactly and reproduced the pause-seam failure offline in
+  minutes. An ffmpeg on the laptop reading the authed ladder URL is a valid HLS
+  client for encoder/seam proofs - but not a proxy for Roku/Xbox behaviour.
 
 ## Standing rules
 

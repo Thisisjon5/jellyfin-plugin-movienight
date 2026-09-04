@@ -737,3 +737,18 @@ frame rate and pixel format are what trigger the reconfigure.
 - Process ruling that came with it (Jon, verbatim intent): slow down - verify
   in the lab before shipping, not restart-and-hope. The encode-probe endpoint
   is the lab.
+
+## 2026-09-03 (closeout) - two more OPEN items from the live day, not ruled
+
+- **`+faststart` on the mezzanine is waste.** Prepare encodes at ~9.5x, then
+  `-movflags +faststart` rewrites the whole 4.9 GB file to move the moov atom -
+  roughly a third of the wall time. faststart exists for browsers doing
+  progressive HTTP playback; our mezzanine is read locally by ffmpeg. Dropping
+  it is a one-token change in `MezzaninePrep`. Not done: outside the scope Jon
+  approved today.
+- **Ladder output inherits the source's non-square pixels** (1080x720 SAR
+  853:720 for a DVD source). Geometrically correct (displays 16:9) and Xbox/Roku
+  played it, but unusual for a streaming ladder. If a client ever mis-renders
+  it, the fix is option B from the pause-seam entry (software `scale`+`pad` to a
+  fixed square canvas before `hwupload`), which also decouples rung geometry from
+  the source entirely.
