@@ -75,4 +75,11 @@ public class LadderFilesTests
         var rewritten = LadderFiles.AppendQueryToUris(index, "api_key=k");
         Assert.Equal("#EXTM3U\n#EXTINF:4,\nseg_1.ts?x=1&api_key=k\n", rewritten);
     }
+
+    [Fact]
+    public void TokenQueryKey_IsTheNameJellyfin12ReadsByDefault()
+    {
+        // api_key is legacy auth in Jellyfin 12 (off by default) - using it 401s every client.
+        Assert.Equal("ApiKey", MovieNightTunerHost.TokenQueryKey);
+    }
 }

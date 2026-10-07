@@ -44,13 +44,16 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
 
 ## Known gotchas
 
-- Spec (§header) originally called for `net8.0` / targetAbi `10.10.0.0`, but the
-  real install target (NAS Jellyfin) runs **10.11.6**, and `Jellyfin.Controller`
-  10.11.x requires `net9.0` per its own NuGet dependency group — retargeted
-  2026-08-13 (Jon's ruling), see SPEC.md retarget note. NuGet packages are pinned
-  to the exact `10.11.6` (matching the running server precisely, to minimize
-  API-drift risk); `build.yaml` targetAbi stays at the conventional `10.11.0.0`
-  floor (Jellyfin's own convention for declaring minimum compatible version).
+- **Target: Jellyfin 12.1 only (Jon, 2026-10-07)** — `net10.0`, NuGet pinned to
+  the exact `12.1.0` the NAS runs, targetAbi `12.1.0.0`. Needs the .NET 10 SDK.
+  A net10 build will NOT load on 10.11. Jellyfin numbering jumped 10.11 → 12.0
+  (2026-09-08). History: net8 → net9/10.11.6 (2026-08-13) → net10/12.1.0.
+- **12.x breaks the compiler can't see — read the server source.** The 12.1 API
+  compiled with zero changes, yet two runtime breaks landed: `?api_key=` is
+  legacy auth, off by default (use `ApiKey`); and `StreamBuilder` refuses direct
+  play for `Container` `hls/applehttp/dash` (jellyfin#17768). Check
+  `raw.githubusercontent.com/jellyfin/jellyfin/v<ver>/...` for any server
+  behaviour we lean on. .NET 10's new analyzer CA1873 is off in the ruleset.
 - Template ships GitHub Actions that call `jellyfin/jellyfin-meta-plugins` reusable
   workflows requiring the jellyfin org's bots/secrets (`command-dispatch`,
   `command-rebase`, `sync-labels`, `publish`, `changelog`, `scan-codeql`) — deleted,
@@ -151,9 +154,10 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
   feeds the client's direct-play profile matcher AND picks ffmpeg's `-f` input
   demuxer on any server-side fallback. Measured 2026-08-19: `"ts"` gets Roku
   direct play but makes the fallback run `-f mpegts` against an HLS *playlist*
-  (exit 187); `null` fixes the fallback but costs Roku direct play; **`"hls"` is
-  the value that works** — Roku, Xbox and Chrome all DirectPlay it, and it gives
-  a correct `-f hls` to whoever falls back. The profile match happens BEFORE
+  (exit 187); `null` fixes the fallback but costs Roku direct play; `"hls"` WAS
+  the value that worked on 10.11 (Roku, Xbox, Chrome DirectPlay, correct `-f hls`
+  fallback) — **but Jellyfin 12 never direct-plays `hls`** (jellyfin#17768), so on
+  12.x it sends every client to the hop. Open question: DECISIONS 2026-10-07. The profile match happens BEFORE
   `SupportsTranscoding` is consulted, so that flag is not what decides direct
   play. Related and separate: `Path`/`TranscodingUrl` must be an **absolute**
   URL the client can reach — a relative one is handed to ffmpeg as a file path
@@ -186,8 +190,7 @@ dotnet build Jellyfin.Plugin.MovieNight.sln
 - **Unit tests need `Jellyfin.Model` with runtime assets in the TEST project.** The
   plugin excludes Jellyfin's runtime assets (the server supplies them), so a test
   that constructs a `MediaStream` throws `FileNotFoundException: MediaBrowser.Model`
-  unless the test csproj references the package itself (added 2026-09-03). With a
-  non-9 SDK, run `DOTNET_ROLL_FORWARD=Major dotnet test`.
+  unless the test csproj references the package itself (added 2026-09-03).
 
 - **Nothing reachable from an `ITunerHost` constructor may inject `IGuideManager`
   or `ILiveTvManager`.** Jellyfin builds every ITunerHost WHILE constructing

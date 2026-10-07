@@ -47,6 +47,13 @@ public class MovieNightTunerHost : ITunerHost
     private const string AnonymousLadderPath = "/MovieNight/stream/hls-open/master.m3u8";
     private const string TokenClaim = "Jellyfin-Token";
 
+    /// <summary>
+    /// Query parameter that carries the client's token on the ladder URL. Jellyfin 12 reads
+    /// <c>api_key</c> only when <c>EnableLegacyAuthorization</c> is on (off by default), so the
+    /// old name 401s every client; <c>ApiKey</c> is always read (AuthorizationContext.cs, v12.1).
+    /// </summary>
+    public const string TokenQueryKey = "ApiKey";
+
     private readonly LiveSession _session;
     private readonly LiveSourceKnobs _knobs;
     private readonly IServerApplicationHost _appHost;
@@ -206,7 +213,7 @@ public class MovieNightTunerHost : ITunerHost
     /// override from settings; the scheme/host/path-base the client itself used to reach Jellyfin
     /// (what a reverse proxy or port forward presents, and what the client can therefore reach
     /// again); Jellyfin's own <c>GetSmartApiUrl</c>; and finally loopback, which only the server
-    /// can use. The client's token rides along as <c>api_key</c> so the authed route accepts it -
+    /// can use. The client's token rides along as <see cref="TokenQueryKey"/> so the authed route accepts it -
     /// and <see cref="LadderFiles.AppendQueryToUris"/> propagates it into every playlist line.
     /// </summary>
     /// <param name="config">Plugin configuration.</param>
@@ -253,7 +260,7 @@ public class MovieNightTunerHost : ITunerHost
         var token = httpContext?.User?.FindFirst(TokenClaim)?.Value;
         if (!string.IsNullOrEmpty(token))
         {
-            url += "?api_key=" + Uri.EscapeDataString(token);
+            url += "?" + TokenQueryKey + "=" + Uri.EscapeDataString(token);
         }
         else
         {
@@ -265,8 +272,9 @@ public class MovieNightTunerHost : ITunerHost
 
     private static string RedactToken(string url)
     {
-        var idx = url.IndexOf("api_key=", StringComparison.Ordinal);
-        return idx < 0 ? url : url[..(idx + 8)] + "…";
+        var marker = TokenQueryKey + "=";
+        var idx = url.IndexOf(marker, StringComparison.Ordinal);
+        return idx < 0 ? url : url[..(idx + marker.Length)] + "…";
     }
 
     private string? GetTunerHostId()
