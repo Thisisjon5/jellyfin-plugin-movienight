@@ -782,3 +782,18 @@ turned the day around: `POST /MovieNight/api/debug/encode-probe`.
   splice is only proven for an ffmpeg client; the mid-GOP cut gives a frame or
   two of decoder concealment at the seam; the slate double-call still happens
   underneath the guard.
+
+## Arc 12 - 2026-10-07: Jellyfin 12.1
+
+The NAS moved to Jellyfin 12.1.0. v0.4.5.0 (net9) still loads and registers
+its tuner on it, but the release notes require plugins to retarget to .NET 10.
+Branch `jellyfin-12.1` (v0.5.0.0): net10.0, Jellyfin.Controller/Model 12.1.0,
+targetAbi 12.1.0.0. There were **zero** compile errors against the 12.1 API; the only build
+failure was the new .NET 10 analyzer CA1873, disabled beside its sibling
+CA1848. 76/76 tests green.
+
+Two runtime breaks the compiler could not see, both found by reading v12.1
+source: (1) `?api_key=` is now legacy auth and off by default, so the ladder
+URL moved to `?ApiKey=` (fixed, pinned by a test); (2) jellyfin#17768 refuses
+direct play for `Container="hls"`, the value our whole client matrix rests on.
+That one is a design question for Jon (DECISIONS 2026-10-07). Not yet run on the NAS.

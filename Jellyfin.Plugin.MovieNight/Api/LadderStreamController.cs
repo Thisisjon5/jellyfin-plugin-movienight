@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.MovieNight.Api;
 /// Serves the live ladder - <c>master.m3u8</c>, per-rung <c>v{i}/index.m3u8</c>, and segments -
 /// to clients directly. This is the one route on the plugin that clients (not just the server)
 /// call, so it is authed with Jellyfin's own <c>[Authorize]</c> (design §4(F), milestone M3),
-/// which accepts the <c>api_key</c> the tuner host put in the URL. Playlists are rewritten on the
+/// which accepts the <c>ApiKey</c> the tuner host put in the URL. Playlists are rewritten on the
 /// way out so that key reaches every relative URI in them.
 /// <para>
 /// Its own controller because the main one is <c>[AllowAnonymous]</c> at class level, which

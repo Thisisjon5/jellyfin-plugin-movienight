@@ -1,9 +1,9 @@
 ---
 name: "Movie Night"
 guid: "8a6e5cf0-30f3-420a-a8ce-e7704d690f94"
-version: "0.4.5.0"
-targetAbi: "10.11.0.0"
-framework: "net9.0"
+version: "0.5.0.0"
+targetAbi: "12.1.0.0"
+framework: "net10.0"
 overview: "Broadcast a movie from your library as a live, owner-controlled Live TV channel"
 description: >
   Movie Night lets a server admin pick a movie from their Jellyfin libraries
@@ -14,6 +14,10 @@ owner: "jon"
 artifacts:
 - "Jellyfin.Plugin.MovieNight.dll"
 changelog: >
+  0.5.0.0: Jellyfin 12.1 support (12.1 only - will not load on 10.11). Retargeted to
+  .NET 10 and the Jellyfin 12.1.0 packages. The ladder URL now authenticates clients with
+  ApiKey instead of api_key, which Jellyfin 12 ignores unless legacy authorization is
+  switched on - without this every client would be refused the stream.
   0.4.0.0: The live pipeline for the Halloween movie nights (planning/ROADMAP-2026-09-03.md
   step 1: M2 + M3 + M4 of the ABR-ladder design, collapsed). The v3 feeders (movie feeder,
   slate, feed.ts, position clock, pause/resume) now feed ONE ladder encoder - one ffmpeg

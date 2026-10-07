@@ -752,3 +752,30 @@ frame rate and pixel format are what trigger the reconfigure.
   it, the fix is option B from the pause-seam entry (software `scale`+`pad` to a
   fixed square canvas before `hwupload`), which also decouples rung geometry from
   the source entirely.
+
+## 2026-10-07 - Jellyfin 12.1: OPEN QUESTION, `Container="hls"` can no longer direct play
+
+- **Context.** The NAS is on Jellyfin 12.1.0 (12.0 shipped 2026-09-08; the
+  10.x line ended). Jon's scope: support 12.1 only. Branch `jellyfin-12.1`
+  retargets to net10.0 / Jellyfin 12.1.0; it compiles with no API changes.
+- **Fixed on the branch (no ruling needed):** 12.x reads `?api_key=` only when
+  `EnableLegacyAuthorization` is on, which is off by default
+  (`Jellyfin.Server.Implementations/Security/AuthorizationContext.cs:108`, v12.1). The
+  ladder URL now carries `?ApiKey=` (line 105, always read).
+- **The blocker.** jellyfin#17768 (in 12.0) added to `StreamBuilder`: any source
+  whose `Container` is `hls`, `applehttp` or `dash` gets
+  `isEligibleForDirectPlay = false`. That's unconditional; even `ForceDirectPlay` doesn't
+  get past it (`MediaBrowser.Model/Dlna/StreamBuilder.cs:726`, v12.1). `"hls"`
+  is the value the 2026-08-19 matrix settled on, because it was the only one where Roku, Xbox
+  and Chrome all DirectPlay. On 12.x it sends every client to the per-client
+  server ffmpeg: the O(N) hop that failed the 08-18 soak.
+- **jellyfin#17298 (live URL rewrite) does NOT affect us**: it only rewrites
+  sources that carry a `LiveStreamId`, and ours is `RequiresOpening=false`.
+- **OPEN, needs Jon.** Options (all measurable on the live NAS without a
+  release, via `POST /MovieNight/api/debug/live/source?container=...` plus
+  `PlaybackInfo` with each client's device profile):
+  A. `"ts"`: Roku direct-played it on 10.11; Xbox/Chrome untested; any client
+     that can't direct play hits the broken `-f mpegts` fallback (exit 187).
+  B. Keep `"hls"` and accept the hop: everyone plays, server cost O(N).
+  C. Per-requester container (the M4 constraint in the 08-19 entry): `"ts"`
+     for clients known to direct play, `"hls"` for the rest. Most work.
